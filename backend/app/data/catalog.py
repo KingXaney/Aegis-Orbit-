@@ -15,6 +15,7 @@ import numpy as np
 from sgp4.api import Satrec
 
 from ..physics.time_utils import iso
+from .spacecraft import SpacecraftDesign, design_for
 
 CATEGORY_DEFAULT_RADIUS_M = {"PAYLOAD": 5.0, "ROCKET_BODY": 5.0, "DEBRIS": 1.0, "UNKNOWN": 2.0}
 
@@ -47,12 +48,18 @@ class OrbitalObject:
     apogee_alt_km: Optional[float] = None
     period_s: Optional[float] = None
     inclination_deg: Optional[float] = None
+    design_override: Optional[SpacecraftDesign] = field(default=None, repr=False)
     warnings: List[str] = field(default_factory=list)
     validation_status: str = "OK"  # OK | STALE | INVALID
 
     @property
     def epoch_unix(self) -> Optional[float]:
         return self.epoch.timestamp() if self.epoch else None
+
+    @property
+    def design(self) -> SpacecraftDesign:
+        """Physical design and envelope; generic shapes follow the current hard-body radius."""
+        return self.design_override or design_for(self.norad_id, self.category, self.radius_m)
 
     def covariance_sigmas_m(self) -> Optional[List[float]]:
         if self.covariance_rtn_m2 is None:
@@ -81,6 +88,7 @@ class OrbitalObject:
             "radius_basis": self.radius_basis,
             "covariance_source": self.covariance_source,
             "covariance_sigmas_rtn_m": self.covariance_sigmas_m(),
+            "design": self.design.as_dict(),
             "validation_status": self.validation_status,
             "warnings": list(self.warnings),
         }

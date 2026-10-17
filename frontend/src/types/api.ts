@@ -84,6 +84,17 @@ export interface ScenarioDetail {
   simulation: SimulationState;
 }
 
+/** Envelope in the local orbital frame: length in-track, width cross-track, height radial (metres). */
+export interface SpacecraftDesign {
+  design_id: string;
+  label: string;
+  length_m: number;
+  width_m: number;
+  height_m: number;
+  basis: string; // PUBLISHED_SPEC | SCENARIO_DEFINITION | SIZED_FROM_HARD_BODY_RADIUS
+  reference: string;
+}
+
 export interface ObjectSummary {
   object_id: string;
   name: string;
@@ -105,6 +116,7 @@ export interface ObjectSummary {
   radius_basis: string;
   covariance_source: string;
   covariance_sigmas_rtn_m: number[] | null;
+  design: SpacecraftDesign;
   validation_status: string;
   warnings: string[];
 }
