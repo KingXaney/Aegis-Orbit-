@@ -1,0 +1,4 @@
+# Obsidian per-user state (opening doc/ as a vault creates these)
+.obsidian/workspace*.json
+.obsidian/cache
+.trash/
