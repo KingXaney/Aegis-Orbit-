@@ -83,6 +83,25 @@ def test_catalog_endpoint(client, tmp_path, monkeypatch):
         ec.reset_cache()
 
 
+def test_catalog_endpoint_is_cacheable(client, tmp_path, monkeypatch):
+    rows, _ = ec.join_rows({"active": _tle_text(ISS_TLE)}, parse_satcat_csv(SATCAT_CSV))
+    path = tmp_path / "catalog.json.gz"
+    ec.write_rows(path, rows, {"source": "test", "retrieved_at": "2026-10-17T00:00:00Z"})
+    monkeypatch.setattr(ec, "_source_path", lambda: (path, "fixture"))
+    ec.reset_cache()
+    try:
+        first = client.get("/api/catalog")
+        etag = first.headers["etag"]
+        assert first.status_code == 200 and etag.startswith('W/"')
+        assert first.headers["cache-control"] == "public, max-age=300"
+        again = client.get("/api/catalog", headers={"If-None-Match": etag})
+        assert again.status_code == 304 and again.content == b"" and again.headers["etag"] == etag
+        stale = client.get("/api/catalog", headers={"If-None-Match": 'W/"something-else"'})
+        assert stale.status_code == 200 and stale.json()["total"] == 1
+    finally:
+        ec.reset_cache()
+
+
 def test_fixture_is_valid_when_present():
     if not ec.FIXTURE_PATH.exists():
         pytest.skip("fixture not built")

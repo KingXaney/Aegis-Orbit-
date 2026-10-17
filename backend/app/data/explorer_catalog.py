@@ -12,6 +12,7 @@ Positions are not computed here; the browser propagates the TLEs with SGP4.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +160,13 @@ def get_catalog_json() -> bytes:
     if "json" not in _cache:
         _cache["json"] = json.dumps(get_catalog(), separators=(",", ":")).encode("utf-8")
     return _cache["json"]
+
+
+def get_catalog_etag() -> str:
+    """A weak validator for the serialised catalog (weak because the response may be gzipped in transit)."""
+    if "etag" not in _cache:
+        _cache["etag"] = f'W/"{hashlib.blake2b(get_catalog_json(), digest_size=12).hexdigest()}"'
+    return _cache["etag"]
 
 
 def download_rows(force: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:

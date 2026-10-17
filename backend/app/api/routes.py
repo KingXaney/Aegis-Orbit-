@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from .. import __version__
@@ -179,14 +179,22 @@ def refresh_data():
 
 
 @router.get("/catalog", response_model=CatalogResponse)
-def catalog():
-    """Every tracked object on orbit with its TLE and SATCAT metadata, for the explorer page."""
+def catalog(request: Request):
+    """Every tracked object on orbit with its TLE and SATCAT metadata, for the explorer page.
+
+    Cacheable for five minutes and revalidated with an ETag, so a return visit costs a 304, not the
+    whole catalog again.
+    """
     try:
         body = explorer_catalog.get_catalog_json()
+        etag = explorer_catalog.get_catalog_etag()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    headers = {"ETag": etag, "Cache-Control": "public, max-age=300"}
+    if etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
     # Serialised once per process; 25k+ rows are too many to re-validate on every request.
-    return Response(content=body, media_type="application/json")
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.get("/catalog/approaches", response_model=ApproachesResponse,
