@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
-import type { CameraMode, LayerFlags } from '../globe/scene';
+import type { LayerFlags } from '../globe/scene';
 import { controller } from '../simulation/controller';
 import { normalizePerception } from '../encounter/encounters';
 
@@ -70,7 +70,6 @@ export interface AppState {
   decisionLoading: boolean;
   decisionError: string | null;
   layers: LayerFlags;
-  cameraMode: CameraMode;
   cameraResetNonce: number;
   notice: string | null;
   perception: PerceptionSnapshot | null;
@@ -103,7 +102,6 @@ export interface AppState {
   approve: (maneuverId: string) => Promise<void>;
   reject: (maneuverId: string, reason?: string) => Promise<void>;
   toggleLayer: (key: keyof LayerFlags) => void;
-  setCameraMode: (mode: CameraMode) => void;
   resetCamera: () => void;
   setSceneReady: (ok: boolean, error?: string) => void;
   dismissNotice: () => void;
@@ -185,7 +183,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   decisionLoading: false,
   decisionError: null,
   layers: { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true },
-  cameraMode: 'follow',
   cameraResetNonce: 0,
   notice: null,
   perception: null,
@@ -194,7 +191,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   perceptionError: null,
   encounterTrajectories: {},
   encounterMode: 'map',
-  mainView: 'encounter',
+  mainView: 'globe', // the globe is the stage on load; the encounter view starts as the minimap
   encounterCameraResetNonce: 0,
   autoSlowNearTca: true,
   showLegend: true,
@@ -433,7 +430,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   toggleLayer: (key) => set({ layers: { ...get().layers, [key]: !get().layers[key] } }),
-  setCameraMode: (mode) => set({ cameraMode: mode }),
   resetCamera: () => set({ cameraResetNonce: get().cameraResetNonce + 1 }),
   setSceneReady: (ok, error) => set({ sceneReady: ok, sceneError: error ?? null }),
   dismissNotice: () => set({ notice: null }),

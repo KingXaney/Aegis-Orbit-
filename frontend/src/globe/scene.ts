@@ -1,5 +1,7 @@
 import * as Cesium from 'cesium';
 import { SampledTrajectory } from '../simulation/trajectory';
+import { buildEarthTexture } from '../explorer/earthTexture';
+import { readPalette } from '../explorer/palette';
 import type { SimulationController } from '../simulation/controller';
 import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, Trajectory } from '../types/api';
 import { TimeBridge, temeToFixed, temeVelocityToFixed } from './frames';
@@ -15,14 +17,15 @@ export interface LayerFlags {
   labels: boolean;
 }
 
-export type CameraMode = 'follow' | 'closeup';
-
 export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
 }
 
+// Path colours follow the encounter view: a glowing teal band for the path the spacecraft will
+// fly, dashed cyan for the original kept for comparison after an approved burn, green candidates.
 const COLORS = {
   primary: Cesium.Color.fromCssColorString('#67e8f9'),
+  planned: Cesium.Color.fromCssColorString('#2dd4bf'),
   tracked: Cesium.Color.fromCssColorString('#93c5fd'),
   debris: Cesium.Color.fromCssColorString('#cbd5e1'),
   threat: Cesium.Color.fromCssColorString('#f87171'),
@@ -32,11 +35,11 @@ const COLORS = {
   label: Cesium.Color.fromCssColorString('#d7e1f2'),
 };
 
-// Normal follow-camera floor; close-up lets the camera reach a true-scale spacecraft model.
-const MIN_ZOOM_M = 2000;
-const CLOSEUP_MIN_ZOOM_M = 2;
-// Follow-camera offset (metres, entity-local frame): far enough to read the orbit's curvature and the Earth limb.
-const FOLLOW_VIEW_FROM = new Cesium.Cartesian3(-420_000, 180_000, 160_000);
+// The camera always tracks the primary, starting close enough to see its true-scale model (a few
+// envelope radii away, see defaultViewFrom); the zoom floor lets it reach the model itself.
+const MIN_ZOOM_M = 2;
+// Tracking offset (metres, entity-local frame) for a primary whose model is not available yet.
+const FALLBACK_VIEW_FROM = new Cesium.Cartesian3(-60, 35, 25);
 
 const SATELLITE_SVG = encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
@@ -73,7 +76,6 @@ export class GlobeScene {
   private candidates: Maneuver[] = [];
   private approvedCandidateId: string | null = null;
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true };
-  private cameraMode: CameraMode = 'follow';
   private mini = false;
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
@@ -84,16 +86,17 @@ export class GlobeScene {
   private conjunctionModelId: string | null = null;
   private scratchPos = new Cesium.Cartesian3();
   private scratchVel = new Cesium.Cartesian3();
+  private earthTextureUrl: string | null = null;
 
   constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string) {
     this.controller = controller;
     this.callbacks = callbacks;
     if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
-    const baseLayer = ionToken
-      ? Cesium.ImageryLayer.fromWorldImagery({})
-      : Cesium.ImageryLayer.fromProviderAsync(
-          Cesium.TileMapServiceImageryProvider.fromUrl(Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII')),
-        );
+    // The globe looks like the home page's: the same vector-drawn Earth (dark ocean, slate land, thin
+    // coastlines, faint graticule), evenly lit, no atmosphere or star field, so the objects carry the
+    // picture. A Cesium ion token opts into world imagery instead of the drawn Earth.
+    const palette = readPalette();
+    const baseLayer = ionToken ? Cesium.ImageryLayer.fromWorldImagery({}) : false;
     this.viewer = new Cesium.Viewer(container, {
       animation: false,
       timeline: false,
@@ -108,14 +111,21 @@ export class GlobeScene {
       vrButton: false,
       shouldAnimate: false,
       baseLayer,
-      skyAtmosphere: new Cesium.SkyAtmosphere(),
+      skyBox: false,
+      skyAtmosphere: false,
       requestRenderMode: false,
+      // as on the home page: the display's real pixel ratio, MSAA instead of the softening FXAA pass
+      useBrowserRecommendedResolution: false,
+      msaaSamples: 4,
     });
     const scene = this.viewer.scene;
-    scene.globe.enableLighting = true;
-    scene.globe.showGroundAtmosphere = true;
-    scene.globe.baseColor = Cesium.Color.fromCssColorString('#06101f');
-    scene.backgroundColor = Cesium.Color.fromCssColorString('#02040a');
+    scene.globe.enableLighting = false;
+    scene.globe.showGroundAtmosphere = false;
+    scene.globe.baseColor = Cesium.Color.fromCssColorString(palette.ocean);
+    scene.backgroundColor = Cesium.Color.fromCssColorString(palette.bg);
+    scene.postProcessStages.fxaa.enabled = false;
+    if (scene.sun) scene.sun.show = false;
+    if (scene.moon) scene.moon.show = false;
     scene.highDynamicRange = false;
     scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_M;
     scene.screenSpaceCameraController.maximumZoomDistance = 80_000_000;
@@ -163,6 +173,28 @@ export class GlobeScene {
     this.viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(20, 15, 22_000_000),
     });
+
+    if (!ionToken) {
+      // 8192 px only where the extra detail can show: high-density screens wider than a phone.
+      const sharp = Math.max(container.clientWidth, window.innerWidth) >= 768 && (window.devicePixelRatio || 1) > 1;
+      void this.addEarth(sharp ? 8192 : 4096, palette);
+    }
+  }
+
+  /** The home page's drawn Earth as the globe's imagery (the plain ocean-coloured globe stands in until it is ready). */
+  private async addEarth(width: number, colors: { ocean: string; land: string; coast: string }): Promise<void> {
+    try {
+      const url = await buildEarthTexture(width, colors);
+      if (this.destroyed) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      this.earthTextureUrl = url;
+      const provider = await Cesium.SingleTileImageryProvider.fromUrl(url);
+      if (!this.destroyed) this.viewer.imageryLayers.addImageryProvider(provider);
+    } catch (err) {
+      console.warn('Earth texture unavailable; keeping the plain globe', err);
+    }
   }
 
   // ------------------------------------------------------------------ helpers
@@ -202,6 +234,11 @@ export class GlobeScene {
 
   private dash(color: Cesium.Color, gap = 12): Cesium.PolylineDashMaterialProperty {
     return new Cesium.PolylineDashMaterialProperty({ color, dashLength: gap, gapColor: Cesium.Color.TRANSPARENT });
+  }
+
+  /** The encounter view's ribbon look: a bright core with a soft glow across a wide polyline. */
+  private glow(color: Cesium.Color): Cesium.PolylineGlowMaterialProperty {
+    return new Cesium.PolylineGlowMaterialProperty({ color, glowPower: 0.22, taperPower: 1 });
   }
 
   private labelGraphics(text: string, color: Cesium.Color, offsetY = -14): Cesium.LabelGraphics.ConstructorOptions {
@@ -263,7 +300,7 @@ export class GlobeScene {
 
       if (isPrimary || isHighlight) this.addModel(obj, traj);
       if (isPrimary) {
-        entity.viewFrom = this.viewFromFor(this.cameraMode);
+        entity.viewFrom = this.defaultViewFrom();
         this.primaryEntity = entity;
         this.addPrimaryIcon(pos);
         this.addPrimaryPath(traj);
@@ -271,7 +308,7 @@ export class GlobeScene {
         this.addObjectPath(t.object_id, traj, color, isHighlight);
       }
     }
-    this.applyCameraMode();
+    this.trackPrimary();
   }
 
   private addModel(obj: ObjectSummary, traj: SampledTrajectory): void {
@@ -288,11 +325,11 @@ export class GlobeScene {
     return this.models.get(objectId)?.model.shown ?? false;
   }
 
-  /** Tracking offset for the primary: orbit context in follow mode, a few envelope radii in close-up. */
-  private viewFromFor(mode: CameraMode): Cesium.Cartesian3 {
+  /** Default tracking offset: a few envelope radii from the primary, so its model fills a good part of the frame. */
+  private defaultViewFrom(): Cesium.Cartesian3 {
     const r = this.primaryId ? this.models.get(this.primaryId)?.model.envelopeRadiusM : undefined;
-    if (mode !== 'closeup' || !r) return FOLLOW_VIEW_FROM;
-    return new Cesium.Cartesian3(-2.6 * r, 1.6 * r, 1.1 * r);
+    if (!r) return FALLBACK_VIEW_FROM;
+    return new Cesium.Cartesian3(-4 * r, 2.2 * r, 1.6 * r);
   }
 
   private addPrimaryIcon(pos: Cesium.PositionProperty): void {
@@ -313,37 +350,54 @@ export class GlobeScene {
 
   private addPrimaryPath(traj: SampledTrajectory): void {
     const P = this.periodS;
+    const approvedBurn = (): number | null => {
+      const approved = this.approvedCandidateId ? this.candidateTrajectories.get(this.approvedCandidateId) : null;
+      return approved?.burnTimeUnix ?? null;
+    };
     // Past trail (solid, dim): one orbit behind the current time.
     const trail = this.viewer.entities.add({
       id: 'path:primary:past',
       polyline: {
         positions: this.pathPositions(traj, (now) => [now - P, now]),
         width: 1.5,
-        material: COLORS.primary.withAlpha(0.35),
+        material: COLORS.planned.withAlpha(0.3),
         arcType: Cesium.ArcType.NONE,
         show: new Cesium.CallbackProperty(() => this.layers.original, false),
       },
     });
-    // Predicted path (dashed): one orbit ahead; after an approved burn it stops at the burn time.
-    const future = this.viewer.entities.add({
-      id: 'path:primary:future',
+    // Planned path (the encounter view's teal band): one orbit ahead; with an approved burn ahead it
+    // stops at the burn, where the approved candidate's band takes over.
+    const planned = this.viewer.entities.add({
+      id: 'path:primary:planned',
       polyline: {
         positions: this.pathPositions(traj, (now) => {
-          const end = now + P;
-          const approved = this.approvedCandidateId ? this.candidateTrajectories.get(this.approvedCandidateId) : null;
-          if (approved?.burnTimeUnix && now >= approved.burnTimeUnix) {
-            return this.layers.original ? [now, end] : null; // original kept for comparison
-          }
-          return [now, approved?.burnTimeUnix ? Math.min(end, approved.burnTimeUnix) : end];
+          const burn = approvedBurn();
+          if (burn !== null && now >= burn) return null;
+          return [now, burn !== null ? Math.min(now + P, burn) : now + P];
+        }),
+        width: 9,
+        material: this.glow(COLORS.planned.withAlpha(0.95)),
+        arcType: Cesium.ArcType.NONE,
+        show: new Cesium.CallbackProperty(() => this.layers.original, false),
+      },
+    });
+    // Original path (dashed cyan): kept for comparison once the approved burn has happened.
+    const original = this.viewer.entities.add({
+      id: 'path:primary:original',
+      polyline: {
+        positions: this.pathPositions(traj, (now) => {
+          const burn = approvedBurn();
+          return burn !== null && now >= burn ? [now, now + P] : null;
         }),
         width: 2,
-        material: this.dash(COLORS.primary.withAlpha(0.9)),
+        material: this.dash(COLORS.primary.withAlpha(0.7)),
         arcType: Cesium.ArcType.NONE,
         show: new Cesium.CallbackProperty(() => this.layers.original, false),
       },
     });
     this.objectPaths.set('path:primary:past', trail);
-    this.objectPaths.set('path:primary:future', future);
+    this.objectPaths.set('path:primary:planned', planned);
+    this.objectPaths.set('path:primary:original', original);
   }
 
   private addObjectPath(objectId: string, traj: SampledTrajectory, color: Cesium.Color, isHighlight: boolean): void {
@@ -454,8 +508,10 @@ export class GlobeScene {
               const end = Math.max(cand.post_tca_unix + 900, now + this.periodS);
               return start < end ? [start, end] : null;
             }),
-            width: isApproved ? 3 : isSelected ? 2.5 : 1.2,
-            material: isApproved ? color : this.dash(color.withAlpha(isSelected ? 0.95 : 0.45), 10),
+            // approved: the planned path's teal band continues along the maneuvered trajectory;
+            // selected: a green band; other candidates: faint solid green, as in the encounter view
+            width: isApproved ? 9 : isSelected ? 7 : 1.5,
+            material: isApproved ? this.glow(COLORS.planned.withAlpha(0.95)) : isSelected ? this.glow(color.withAlpha(0.85)) : color.withAlpha(0.4),
             arcType: Cesium.ArcType.NONE,
             show: showPath,
           },
@@ -513,11 +569,6 @@ export class GlobeScene {
     this.layers = { ...layers };
   }
 
-  setCameraMode(mode: CameraMode): void {
-    this.cameraMode = mode;
-    this.applyCameraMode();
-  }
-
   /** Minimap mode: cheaper rendering, no labels, no scroll zoom. */
   setMiniMode(mini: boolean): void {
     this.mini = mini;
@@ -526,12 +577,11 @@ export class GlobeScene {
     this.viewer.scene.screenSpaceCameraController.enableZoom = !mini;
   }
 
-  private applyCameraMode(): void {
+  /** Track the primary from the default offset (re-tracking makes Cesium apply the offset again). */
+  private trackPrimary(): void {
     if (this.destroyed) return;
-    this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = this.cameraMode === 'closeup' ? CLOSEUP_MIN_ZOOM_M : MIN_ZOOM_M;
     if (this.primaryEntity) {
-      // re-track so Cesium applies the mode's viewFrom offset
-      this.primaryEntity.viewFrom = this.viewFromFor(this.cameraMode);
+      this.primaryEntity.viewFrom = this.defaultViewFrom();
       this.viewer.trackedEntity = undefined;
       this.viewer.trackedEntity = this.primaryEntity;
     } else {
@@ -540,15 +590,11 @@ export class GlobeScene {
     }
   }
 
-  /** Re-track the primary with the current mode's offset (the camera always tracks the primary). */
+  /** Back to the default framing of the primary after the user has zoomed or orbited the camera. */
   resetCamera(): void {
     this.viewer.trackedEntity = undefined;
     this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-    this.applyCameraMode();
-  }
-
-  flyToPrimary(): void {
-    if (this.primaryEntity) this.applyCameraMode();
+    this.trackPrimary();
   }
 
   // ------------------------------------------------------------------ cleanup
@@ -574,6 +620,7 @@ export class GlobeScene {
     for (const id of [...this.models.keys()]) this.removeModel(id);
     this.handler.destroy();
     this.viewer.destroy();
+    if (this.earthTextureUrl) URL.revokeObjectURL(this.earthTextureUrl);
   }
 
   get currentConjunction(): Conjunction | null {

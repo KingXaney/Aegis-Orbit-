@@ -19,7 +19,6 @@ export default function GlobeView({ mini = false }: { mini?: boolean }) {
   const selectedManeuverId = useAppStore((s) => s.selectedManeuverId);
   const approvedManeuverId = useAppStore((s) => s.simulation?.approved_maneuver_id ?? null);
   const layers = useAppStore((s) => s.layers);
-  const cameraMode = useAppStore((s) => s.cameraMode);
   const cameraResetNonce = useAppStore((s) => s.cameraResetNonce);
   const selectObject = useAppStore((s) => s.selectObject);
   const selectManeuver = useAppStore((s) => s.selectManeuver);
@@ -59,7 +58,6 @@ export default function GlobeView({ mini = false }: { mini?: boolean }) {
     const trajList = Object.values(trajectories);
     if (trajList.length === 0) return;
     scene.setScenario(scenario, Object.values(objects), trajList);
-    scene.setCameraMode(cameraMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenario?.scenario_id, scenario?.simulation.reset_count, trajectories]);
 
@@ -77,10 +75,6 @@ export default function GlobeView({ mini = false }: { mini?: boolean }) {
   useEffect(() => {
     sceneRef.current?.setLayers(layers);
   }, [layers]);
-
-  useEffect(() => {
-    sceneRef.current?.setCameraMode(cameraMode);
-  }, [cameraMode]);
 
   useEffect(() => {
     if (cameraResetNonce > 0) sceneRef.current?.resetCamera();
