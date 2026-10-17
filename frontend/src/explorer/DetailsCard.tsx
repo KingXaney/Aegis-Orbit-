@@ -34,7 +34,12 @@ function Row({ label, children, sub }: { label: string; children: ReactNode; sub
 
 /** Holds the width of a live value until the first propagated state arrives. */
 function Pending({ width }: { width: string }) {
-  return <span className="x-skeleton inline-block h-3 align-middle" style={{ width }} aria-label="Computing" />;
+  return (
+    <>
+      <span className="x-skeleton inline-block h-3 align-middle" style={{ width }} aria-hidden="true" />
+      <span className="sr-only">Computing</span>
+    </>
+  );
 }
 
 export default function DetailsCard() {
@@ -46,7 +51,9 @@ export default function DetailsCard() {
   useEffect(() => {
     if (selected === null) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') select(null);
+      if (e.key !== 'Escape' || e.defaultPrevented || useExplorerStore.getState().panelOpen) return;
+      e.preventDefault();
+      select(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

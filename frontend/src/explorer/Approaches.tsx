@@ -205,8 +205,12 @@ export default function Approaches() {
 
   useEffect(() => {
     if (!pinnedKey) return;
+    // Escape closes the topmost thing only: the filters sheet, then the details card, then the pin.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') togglePinned(pinnedKey);
+      const s = useExplorerStore.getState();
+      if (e.key !== 'Escape' || e.defaultPrevented || s.panelOpen || s.selected !== null) return;
+      e.preventDefault();
+      togglePinned(pinnedKey);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

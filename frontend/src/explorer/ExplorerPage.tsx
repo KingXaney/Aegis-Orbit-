@@ -46,8 +46,7 @@ function UtcClock() {
   }, []);
   return (
     <p className="pointer-events-none absolute left-4 top-4 rounded-[4px] bg-x-bg px-2 py-1 text-x-12 text-x-muted">
-      <span className="sr-only">Positions shown for </span>
-      {clockFormat.format(now)} UTC
+      Positions at <span className="text-x-text">{clockFormat.format(now)}</span> UTC
     </p>
   );
 }

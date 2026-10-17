@@ -23,6 +23,7 @@ export default function GlobeCanvas() {
   const routeRequest = useRef(0);
   const routeMeta = useRef<{ approach: SceneApproach | null; revealS: number; fly: boolean }>({ approach: null, revealS: 0, fly: false });
   const routeDrawn = useRef(false);
+  const flownTo = useRef<string | null>(null);
   const objects = useExplorerStore((s) => s.objects);
   const mask = useExplorerStore((s) => s.mask);
   const visible = useExplorerStore((s) => s.visible);
@@ -144,8 +145,10 @@ export default function GlobeCanvas() {
           ? { index: secondary, tcaTemeKm: active.primary_position_teme_km, label: `${active.miss_distance_km.toFixed(2)} km at ${timeFormat.format(active.tca_unix * 1000)} UTC` }
           : null,
       revealS: routeDrawn.current ? (active ? APPROACH_REVEAL_S : 0) : FIRST_REVEAL_S,
-      fly: active !== null && pinned === approachKey(active),
+      // Fly once per pin: a refreshed list must not move the camera again.
+      fly: active !== null && pinned === approachKey(active) && flownTo.current !== pinned,
     };
+    flownTo.current = pinned;
     routeDrawn.current = true;
     const msg: WorkerIn = { type: 'route', requestId: ++routeRequest.current, items };
     worker.postMessage(msg);
