@@ -2,59 +2,109 @@ import '@fontsource/b612/400.css';
 import '@fontsource/b612/700.css';
 import '@fontsource/b612-mono/400.css';
 import '@fontsource/barlow-condensed/600.css';
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../api/client';
-import { formatUtc } from '../lib/format';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
 import { OBJECT_TYPES, activeFilterCount } from './filters';
-import GlobeCanvas from './GlobeCanvas';
 import { FiltersIcon } from './icons';
 import { TYPE_INK } from './palette';
 import { useExplorerStore } from './store';
 
+// Cesium is most of the page's weight; loading it separately lets the text paint first.
+const GlobeCanvas = lazy(() => import('./GlobeCanvas'));
+
 const nf = new Intl.NumberFormat('en-US');
+const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const retrievedFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
+const clockFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
 
-const PAGES = [
-  { href: '/', label: 'Home' },
-  { href: '/mission', label: 'Mission simulator' },
-];
+const TYPE_PLURAL = { PAYLOAD: 'Active satellites', DEBRIS: 'Debris', ROCKET_BODY: 'Rocket bodies' } as const;
 
-const STAT_LABEL = { PAYLOAD: 'Active satellites', DEBRIS: 'Debris', ROCKET_BODY: 'Rocket bodies' } as const;
-
-function SiteNav() {
-  const path = window.location.pathname;
+function SiteHeader() {
   return (
-    <nav aria-label="Pages" className="x-panel pointer-events-auto flex gap-0.5 rounded-full p-1">
-      {PAGES.map((p) => {
-        const current = p.href === '/' ? !path.startsWith('/mission') : path.startsWith(p.href);
-        return (
-          <a
-            key={p.href}
-            href={p.href}
-            aria-current={current ? 'page' : undefined}
-            className={`x-focus rounded-full px-3.5 py-1.5 text-x-12 transition-colors ${current ? 'bg-x-text text-x-bg' : 'text-x-muted hover:text-x-text'}`}
-          >
-            {p.label}
-          </a>
-        );
-      })}
-    </nav>
+    <div className="flex min-h-10 items-center justify-between gap-4">
+      <a href="/" aria-current="page" className="x-display x-focus rounded-[4px] text-x-21">
+        Aegis Orbit
+      </a>
+      <nav aria-label="Pages">
+        <a href="/mission" className="x-link text-x-14">
+          Simulator
+        </a>
+      </nav>
+    </div>
   );
 }
 
-function LiveClock() {
-  const [now, setNow] = useState(() => Date.now() / 1000);
+function UtcClock() {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
   return (
-    <p className="flex items-center gap-2 text-x-12 text-x-muted">
-      <span className="h-1.5 w-1.5 rounded-full bg-x-payload" aria-hidden="true" />
-      Live
-      <span className="tabular-nums text-x-text">{formatUtc(now, false)}</span>
+    <p className="pointer-events-none absolute left-4 top-4 rounded-[4px] bg-x-bg px-2 py-1 text-x-12 text-x-muted">
+      <span className="sr-only">Positions shown for </span>
+      {clockFormat.format(now)} UTC
     </p>
+  );
+}
+
+function formatLatLon(lat: number, lon: number): string {
+  return `${Math.abs(lat).toFixed(0)}°${lat < 0 ? 'S' : 'N'} ${Math.abs(lon).toFixed(0)}°${lon < 0 ? 'W' : 'E'}`;
+}
+
+/** GPM's live state: the spacecraft the whole product is about. */
+function ModelReadout() {
+  const live = useExplorerStore((s) => s.modelLive);
+  const modelIndex = useExplorerStore((s) => s.modelIndex);
+  const focus = useExplorerStore((s) => s.focus);
+  const values: [string, string | null][] = [
+    ['Altitude', live ? `${nf0.format(live.altitudeKm)} km` : null],
+    ['Speed', live ? `${live.speedKms.toFixed(2)} km/s` : null],
+    ['Over', live ? formatLatLon(live.latDeg, live.lonDeg) : null],
+  ];
+  return (
+    <section aria-labelledby="model-heading">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 id="model-heading" className="x-display text-x-21">
+            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-x-accent align-middle" aria-hidden="true" />
+            GPM Core Observatory
+          </h2>
+          <p className="mt-1 text-x-14 text-x-muted">NASA and JAXA’s rain-measuring satellite, and the spacecraft the simulator flies.</p>
+        </div>
+        {modelIndex !== null && (
+          <button type="button" onClick={() => focus(modelIndex)} className="x-button shrink-0">
+            Show on globe
+          </button>
+        )}
+      </div>
+      <dl className="mt-4 grid grid-cols-3 gap-4">
+        {values.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-x-12 text-x-muted">{label}</dt>
+            <dd className="x-mono mt-1 text-x-16">{value ?? <span className="x-skeleton inline-block h-4 w-16 align-middle" aria-label="Computing" />}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function PlanBurn() {
+  return (
+    <section aria-labelledby="plan-heading" className="border-t border-x-divider pt-6">
+      <h2 id="plan-heading" className="sr-only">
+        Plan an avoidance burn
+      </h2>
+      <a href="/mission" className="x-button x-button-primary w-full sm:w-auto">
+        Plan an avoidance burn
+      </a>
+      <p className="mt-3 text-x-14 text-x-muted">
+        The simulator runs the whole loop on a scripted encounter with a GPM stand-in: screen for close approaches, estimate the risk, plan a burn, and approve or reject it.
+      </p>
+    </section>
   );
 }
 
@@ -70,44 +120,65 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
       aria-controls="filter-panel"
       aria-label={active ? `Filters, ${active} applied` : 'Filters'}
       onClick={() => setOpen(!open)}
-      className="x-button pointer-events-auto flex items-center gap-2 rounded-full px-3 py-2 md:px-4"
+      className="x-button shrink-0"
     >
       <FiltersIcon />
-      <span className="hidden text-x-14 md:inline">Filters</span>
-      {active > 0 && <span className="rounded-full bg-x-accent px-1.5 text-x-12 font-bold leading-[18px] text-x-bg">{active}</span>}
+      Filters
+      {active > 0 && <span className="x-mono rounded-[4px] bg-x-accent px-1.5 text-x-12 font-bold text-x-bg">{active}</span>}
     </button>
   );
 }
 
-/** Counts of what is on screen, by type. Doubles as the colour legend. */
-function Stats() {
+/** What the globe shows, by type. Doubles as its colour key. */
+function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButtonElement | null> }) {
   const byType = useExplorerStore((s) => s.visibleByType);
+  const visible = useExplorerStore((s) => s.visible);
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
   const resetFilters = useExplorerStore((s) => s.resetFilters);
   return (
-    <div className="x-over-globe flex flex-col items-center gap-3">
-      <ul className="flex items-start justify-center gap-6 md:gap-12" aria-label="Objects shown, by type" aria-live="polite">
+    <section aria-labelledby="catalog-heading" className="border-t border-x-divider pt-6">
+      <div className="flex items-center justify-between gap-4">
+        <h2 id="catalog-heading" className="x-display text-x-21">
+          On the globe
+        </h2>
+        <FiltersButton buttonRef={filtersButton} />
+      </div>
+      <ul className="mt-3" aria-label="Objects shown, by type">
         {OBJECT_TYPES.map((t) => (
-          <li key={t} className="flex flex-col items-center">
-            <span className="text-x-21 font-bold tabular-nums leading-none md:text-x-36">{nf.format(byType[t])}</span>
-            <span className="mt-2 flex items-center gap-1.5 text-x-12 text-x-muted md:text-x-14">
-              <span className="h-2 w-2 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
-              {STAT_LABEL[t]}
-            </span>
+          <li key={t} className="flex min-h-8 items-center gap-3">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
+            <span className="flex-1 text-x-14">{TYPE_PLURAL[t]}</span>
+            <span className="text-x-14">{nf.format(byType[t])}</span>
           </li>
         ))}
       </ul>
-      {active > 0 ? (
-        <p className="text-x-12 text-x-muted">
-          Filtered view.{' '}
-          <button type="button" onClick={resetFilters} className="x-link pointer-events-auto">
-            Show everything
-          </button>
-        </p>
-      ) : (
-        <p className="hidden text-x-12 text-x-muted md:block">Orbital data from CelesTrak. Positions are SGP4 estimates.</p>
-      )}
-    </div>
+      <p className="mt-2 text-x-14 text-x-muted" aria-live="polite">
+        {active > 0 ? (
+          <>
+            {nf.format(visible)} shown with filters.{' '}
+            <button type="button" onClick={resetFilters} className="x-link">
+              Show everything
+            </button>
+          </>
+        ) : (
+          `${nf.format(visible)} objects, each positioned live in your browser.`
+        )}
+      </p>
+    </section>
+  );
+}
+
+function DataCredit() {
+  const meta = useExplorerStore((s) => s.meta);
+  const retrieved = meta?.retrieved_at ? retrievedFormat.format(new Date(meta.retrieved_at)) : null;
+  return (
+    <p className="text-x-12 text-x-muted">
+      Orbital elements from{' '}
+      <a href="https://celestrak.org" className="x-link" rel="noopener">
+        CelesTrak
+      </a>{' '}
+      GP data and SATCAT{retrieved ? `, retrieved ${retrieved} UTC` : ''}. Positions are SGP4 estimates, not telemetry.
+    </p>
   );
 }
 
@@ -116,7 +187,6 @@ export default function ExplorerPage() {
   const error = useExplorerStore((s) => s.error);
   const sceneError = useExplorerStore((s) => s.sceneError);
   const panelOpen = useExplorerStore((s) => s.panelOpen);
-  const hasSelection = useExplorerStore((s) => s.selected !== null);
   const load = useExplorerStore((s) => s.load);
   const filtersButton = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
@@ -125,65 +195,71 @@ export default function ExplorerPage() {
     void load();
   }, [load]);
 
-  // Return focus to the Filters button when the filters page closes.
+  // The browser chrome matches the page on phones.
+  useEffect(() => {
+    const meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    meta.content = getComputedStyle(document.documentElement).getPropertyValue('--x-bg').trim() || '#0b0d10';
+    document.head.appendChild(meta);
+    return () => meta.remove();
+  }, []);
+
+  // Return focus to the Filters button when the filters sheet closes.
   useEffect(() => {
     if (wasOpen.current && !panelOpen) filtersButton.current?.focus();
     wasOpen.current = panelOpen;
   }, [panelOpen]);
 
   return (
-    <div className="explorer relative h-full w-full overflow-hidden bg-x-bg font-x-body text-x-text">
-      <GlobeCanvas />
+    <main className="explorer grid min-h-full bg-x-bg font-x-body text-x-text [grid-template-areas:'head'_'globe'_'body'] [grid-template-rows:auto_56svh_auto] lg:h-full lg:grid-cols-[minmax(360px,420px)_1fr] lg:[grid-template-areas:'head_globe'_'body_globe'] lg:[grid-template-rows:auto_1fr]">
+      <header className="px-4 pb-6 pt-4 [grid-area:head] md:px-6 lg:border-r lg:border-x-divider lg:pt-6">
+        <SiteHeader />
+        <h1 className="x-display mt-8 text-x-28 lg:mt-12 lg:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
+        <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
+      </header>
 
-      <div className="pointer-events-none absolute inset-0">
-        <header className="x-over-globe flex flex-col items-center px-4 pt-4 md:pt-5">
-          <SiteNav />
-          <h1 className="x-display mt-4 text-x-28 md:mt-5 md:text-x-36">Aegis Orbit</h1>
-          <p className="mt-2 text-center text-x-12 text-x-muted md:text-x-14">Every tracked object in Earth orbit, moving in real time</p>
-        </header>
-
-        <div className="absolute left-5 top-6 hidden md:block">
-          <LiveClock />
-        </div>
-
-        {status === 'ready' && (
-          <>
-            <div className="absolute right-3 top-4 md:right-5 md:top-5">
-              <FiltersButton buttonRef={filtersButton} />
-            </div>
-            <div className={`absolute inset-x-0 bottom-5 px-4 md:bottom-6 ${hasSelection ? 'max-md:hidden' : ''}`}>
-              <Stats />
-            </div>
-            <DetailsCard />
-            <FilterPanel />
-          </>
+      <section aria-label="Live globe of tracked objects" className="relative min-h-[320px] overflow-hidden [grid-area:globe]">
+        <Suspense fallback={null}>
+          <GlobeCanvas />
+        </Suspense>
+        <UtcClock />
+        {sceneError && (
+          <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-x-14 text-x-muted" role="alert">
+            The 3D globe couldn’t start because WebGL isn’t available in this browser ({sceneError}). Everything else on the page still works.
+          </p>
         )}
+        {status === 'ready' && <DetailsCard />}
+      </section>
 
+      <div className="flex flex-col gap-8 px-4 py-8 [grid-area:body] md:px-6 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
         {status === 'loading' && (
-          <p className="absolute inset-x-0 top-1/2 text-center text-x-14 text-x-muted" role="status">
+          <p className="text-x-14 text-x-muted" role="status">
             Loading the orbital catalog…
           </p>
         )}
-
         {status === 'error' && (
-          <div className="x-panel pointer-events-auto absolute left-1/2 top-1/2 w-[min(440px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 p-5" role="alert">
-            <h2 className="text-x-14 font-bold">Can’t load the catalog from {API_BASE}</h2>
-            <p className="mt-2 text-x-12 text-x-muted">{error}</p>
-            <p className="mt-2 text-x-12 text-x-muted">
-              Start the backend with <code className="text-x-text">uvicorn app.main:app --reload</code> in <code className="text-x-text">backend/</code>, then retry.
+          <div className="x-panel p-4" role="alert">
+            <h2 className="text-x-16 font-bold">Can’t load the catalog from {API_BASE}</h2>
+            <p className="mt-2 text-x-14 text-x-muted">{error}</p>
+            <p className="mt-2 text-x-14 text-x-muted">
+              Start the backend with <code className="x-mono text-x-text">uvicorn app.main:app --reload</code> in <code className="x-mono text-x-text">backend/</code>, then retry.
             </p>
             <button type="button" onClick={() => void load()} className="x-button mt-4">
               Retry
             </button>
           </div>
         )}
-
-        {sceneError && (
-          <p className="absolute inset-x-6 top-1/2 text-center text-x-14 text-x-debris" role="alert">
-            The 3D globe couldn’t start, so WebGL may be unavailable in this browser: {sceneError}
-          </p>
+        {status === 'ready' && (
+          <>
+            <ModelReadout />
+            <PlanBurn />
+            <CatalogKey filtersButton={filtersButton} />
+          </>
         )}
+        <DataCredit />
       </div>
-    </div>
+
+      {status === 'ready' && <FilterPanel />}
+    </main>
   );
 }

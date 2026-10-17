@@ -14,15 +14,15 @@ export interface ExplorerSceneCallbacks {
   onPick: (index: number | null) => void;
 }
 
-// Solid, anti-aliased dots (pixels). Debris is the most numerous, so it is the smallest and slightly
-// translucent, which keeps dense shells from merging into a smear.
-const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 2.5, ROCKET_BODY: 3 };
-const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.75, ROCKET_BODY: 0.9 };
+// Solid, anti-aliased dots (pixels), small and slightly translucent so the dense shells (Starlink's
+// above all) don't merge into a smear and GPM's larger magenta dot stays the thing the eye finds.
+const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 3, DEBRIS: 2.5, ROCKET_BODY: 3 };
+const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 0.85, DEBRIS: 0.75, ROCKET_BODY: 0.9 };
 const SELECTED_SIZE = 8;
 // The model spacecraft: a magenta dot larger than the rest, a soft steady halo so it can be found at a
 // glance, and two staggered ripples that grow and fade so one is always on screen.
-const MODEL_SIZE = 6;
-const HALO_SIZE = 14;
+const MODEL_SIZE = 7;
+const HALO_SIZE = 16;
 const PULSE_PERIOD_S = 2;
 const PULSE_START_PX = 6;
 const PULSE_END_PX = 34;

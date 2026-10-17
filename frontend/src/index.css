@@ -251,14 +251,14 @@ input[type='range'].scrubber:focus-visible {
 .x-link {
   position: relative;
   border-radius: 4px;
-  color: var(--x-accent);
+  color: inherit;
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--x-accent) 45%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--x-accent) 60%, transparent);
   text-underline-offset: 3px;
   transition: text-decoration-color 160ms var(--x-ease);
 }
 .x-link:hover {
-  text-decoration-color: currentColor;
+  text-decoration-color: var(--x-accent);
 }
 /* Extends a small text control's hit area to 40px tall without moving anything. */
 .x-link::after {

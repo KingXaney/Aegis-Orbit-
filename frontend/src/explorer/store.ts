@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
 import type { CatalogObject, CatalogObjectType, CatalogResponse, OrbitClass } from '../types/api';
-import { DEFAULT_FILTERS, computeMask, ownerCounts, type Filters, type OwnerCount } from './filters';
+import { DEFAULT_FILTERS, MODEL_NORAD_ID, computeMask, ownerCounts, type Filters, type OwnerCount } from './filters';
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.status === 0 ? e.message : `${e.message} (HTTP ${e.status})`;
@@ -11,6 +11,11 @@ function errMsg(e: unknown): string {
 export interface LiveState {
   altitudeKm: number;
   speedKms: number;
+}
+
+export interface ModelLive extends LiveState {
+  latDeg: number;
+  lonDeg: number;
 }
 
 export interface ExplorerState {
@@ -28,6 +33,9 @@ export interface ExplorerState {
   panelOpen: boolean;
   selected: number | null;
   live: LiveState | null;
+  /** Index of GPM, the model spacecraft, in `objects` (null if the catalog lacks it). */
+  modelIndex: number | null;
+  modelLive: ModelLive | null;
   /** Set when a selection should also turn the camera toward the object (search results). */
   focusRequest: { index: number; nonce: number } | null;
   sceneError: string | null;
@@ -44,6 +52,7 @@ export interface ExplorerState {
   focus: (index: number) => void;
   setFailed: (failed: Uint8Array) => void;
   setLive: (live: LiveState | null) => void;
+  setModelLive: (live: ModelLive | null) => void;
   setSceneError: (msg: string) => void;
 }
 
@@ -69,6 +78,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     panelOpen: false,
     selected: null,
     live: null,
+    modelIndex: null,
+    modelLive: null,
     focusRequest: null,
     sceneError: null,
 
@@ -76,7 +87,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
       set({ status: 'loading', error: null });
       try {
         const { objects, ...meta } = await api.catalog();
-        set({ objects, meta, owners: ownerCounts(objects), status: 'ready', selected: null });
+        const model = objects.findIndex((o) => o.norad_id === MODEL_NORAD_ID);
+        set({ objects, meta, owners: ownerCounts(objects), modelIndex: model >= 0 ? model : null, status: 'ready', selected: null });
         refilter(get().filters, new Uint8Array(objects.length));
       } catch (e) {
         set({ status: 'error', error: errMsg(e) });
@@ -107,6 +119,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
       refilter(get().filters, failed);
     },
     setLive: (live) => set({ live }),
+    setModelLive: (modelLive) => set({ modelLive }),
     setSceneError: (sceneError) => set({ sceneError }),
   };
 });

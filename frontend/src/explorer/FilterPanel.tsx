@@ -242,7 +242,7 @@ export default function FilterPanel() {
       id="filter-panel"
       role="dialog"
       aria-label="Filters"
-      className="x-panel x-floating x-sheet-in pointer-events-auto absolute inset-0 z-20 flex flex-col rounded-none md:inset-y-4 md:left-auto md:right-4 md:w-[360px] md:rounded-[12px]"
+      className="x-panel x-floating x-sheet-in fixed inset-0 z-40 flex flex-col rounded-none md:inset-y-4 md:left-auto md:right-4 md:w-[380px] md:rounded-[12px]"
     >
       <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-5">
         <h2 className="x-display text-x-28">Filters</h2>

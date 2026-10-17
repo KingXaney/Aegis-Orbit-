@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ExplorerScene } from './ExplorerScene';
 import { MAX_PATHS } from './filters';
-import { STRIDE, altitudeKm, speedKms } from './propagation';
+import { STRIDE, altitudeKm, speedKms, subpoint } from './propagation';
 import type { WorkerIn, WorkerOut } from './propagator.worker';
 import { useExplorerStore } from './store';
 
@@ -57,6 +57,11 @@ export default function GlobeCanvas() {
           const failed = new Uint8Array(objects.length);
           for (let i = 0; i < objects.length; i++) failed[i] = Number.isFinite(msg.buffer[i * STRIDE]) ? 0 : 1;
           store.setFailed(failed);
+        }
+        const m = store.modelIndex;
+        if (m !== null && Number.isFinite(msg.buffer[m * STRIDE])) {
+          const o = m * STRIDE;
+          store.setModelLive({ altitudeKm: altitudeKm(msg.buffer, o), speedKms: speedKms(msg.buffer, o), ...subpoint(msg.buffer, o, msg.unix) });
         }
         const sel = store.selected;
         if (sel !== null && Number.isFinite(msg.buffer[sel * STRIDE])) {

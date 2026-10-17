@@ -58,7 +58,7 @@ export default function DetailsCard() {
   return (
     <section
       aria-label={`Details for ${o.name}`}
-      className="x-panel x-floating x-card-in pointer-events-auto absolute inset-x-0 bottom-0 max-h-[70svh] overflow-y-auto rounded-b-none p-4 md:inset-x-auto md:bottom-auto md:right-4 md:top-20 md:w-[340px] md:rounded-b-[12px]"
+      className="x-panel x-floating x-card-in fixed inset-x-0 bottom-0 z-30 max-h-[70svh] overflow-y-auto rounded-b-none p-4 lg:absolute lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:max-h-[calc(100%-2rem)] lg:w-[340px] lg:rounded-b-[12px]"
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1 pt-1">

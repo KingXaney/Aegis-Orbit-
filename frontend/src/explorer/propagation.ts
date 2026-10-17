@@ -69,6 +69,12 @@ export function speedKms(state: ArrayLike<number>, offset = 0): number {
   return Math.hypot(state[offset + 3], state[offset + 4], state[offset + 5]);
 }
 
+/** The point on the ground below an object (geocentric latitude and longitude, degrees). */
+export function subpoint(state: ArrayLike<number>, offset: number, unix: number): { latDeg: number; lonDeg: number } {
+  const [x, y, z] = temeToFixed(state[offset], state[offset + 1], state[offset + 2], gmst(unix));
+  return { latDeg: (Math.atan2(z, Math.hypot(x, y)) * 180) / Math.PI, lonDeg: (Math.atan2(y, x) * 180) / Math.PI };
+}
+
 /** Rotate a TEME vector into the Earth-fixed frame about Z by GMST. */
 export function temeToFixed(x: number, y: number, z: number, theta: number): [number, number, number] {
   const c = Math.cos(theta);
