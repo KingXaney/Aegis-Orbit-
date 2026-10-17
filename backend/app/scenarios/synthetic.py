@@ -25,6 +25,7 @@ from typing import Dict, List
 import numpy as np
 
 from ..data.catalog import Catalog, OrbitalObject
+from ..data.spacecraft import BOX_WING_BUS, DEBRIS_FRAGMENT, SpacecraftDesign
 from ..physics.frames import circular_state, osculating_elements, rtn_basis
 from ..physics.propagation import MODEL_NUMERICAL, propagate_states
 from ..physics.time_utils import iso, to_unix
@@ -47,6 +48,18 @@ MISS_RADIAL_KM = 0.05
 STEP_S = 10.0
 
 R_EARTH_KM = 6378.137
+
+# Envelopes (in-track x cross-track x radial, metres) chosen to fit inside each object's hard-body radius.
+PRIMARY_DESIGN = SpacecraftDesign(
+    design_id=BOX_WING_BUS, label="AEGIS-1 smallsat (bus + two solar arrays)",
+    length_m=2.4, width_m=14.0, height_m=2.2, basis="SCENARIO_DEFINITION",
+    reference="synthetic scenario definition: 2.4 x 2.2 m bus, arrays spanning 14 m",
+)
+SECONDARY_DESIGN = SpacecraftDesign(
+    design_id=DEBRIS_FRAGMENT, label="DEB-2047 structural fragment",
+    length_m=3.6, width_m=1.8, height_m=0.5, basis="SCENARIO_DEFINITION",
+    reference="synthetic scenario definition",
+)
 
 
 def _rotate_about(vec: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
@@ -95,8 +108,10 @@ def build_synthetic_catalog() -> Catalog:
 
     primary = _numerical_object(PRIMARY_ID, "AEGIS-1 (synthetic primary)", "PAYLOAD", r_p0, v_p0, T0_UNIX,
                                 radius_m=7.5, sigmas_rtn_m=(60.0, 200.0, 60.0), position_basis="SYNTHETIC_STATE")
+    primary.design_override = PRIMARY_DESIGN
     secondary = _numerical_object(SECONDARY_ID, "DEB-2047 (synthetic debris)", "DEBRIS", y_s0[:3], y_s0[3:], T0_UNIX,
                                   radius_m=2.5, sigmas_rtn_m=(120.0, 250.0, 120.0), position_basis="SYNTHETIC_STATE")
+    secondary.design_override = SECONDARY_DESIGN
 
     # 4. background objects (non-threatening by design; verified by the scenario tests)
     background_defs = [

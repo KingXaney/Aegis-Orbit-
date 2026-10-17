@@ -46,6 +46,16 @@ class ScenarioDetail(BaseModel):
     simulation: "SimulationState"
 
 
+class SpacecraftDesignModel(BaseModel):
+    design_id: str
+    label: str
+    length_m: float
+    width_m: float
+    height_m: float
+    basis: str
+    reference: str = ""
+
+
 class ObjectSummary(BaseModel):
     object_id: str
     name: str
@@ -67,6 +77,7 @@ class ObjectSummary(BaseModel):
     radius_basis: str
     covariance_source: str
     covariance_sigmas_rtn_m: Optional[List[float]] = None
+    design: SpacecraftDesignModel
     validation_status: str
     warnings: List[str] = []
 

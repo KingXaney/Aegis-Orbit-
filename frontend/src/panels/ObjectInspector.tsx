@@ -2,6 +2,13 @@ import { useAppStore } from '../store/useAppStore';
 import { Badge, Button, KeyValue, Spinner } from '../components/ui';
 import { formatNumber, formatUtc } from '../lib/format';
 
+// L in-track, W cross-track, H radial
+const DESIGN_BASIS: Record<string, string> = {
+  PUBLISHED_SPEC: 'published',
+  SCENARIO_DEFINITION: 'scenario definition',
+  SIZED_FROM_HARD_BODY_RADIUS: 'generic, sized from HBR',
+};
+
 export default function ObjectInspector() {
   const selectedObjectId = useAppStore((s) => s.selectedObjectId);
   const objects = useAppStore((s) => s.objects);
@@ -43,6 +50,8 @@ export default function ObjectInspector() {
             ['Model', summary?.propagation_model ?? '—'],
             ['Perigee / apogee', `${formatNumber(summary?.perigee_alt_km, 0)} / ${formatNumber(summary?.apogee_alt_km, 0)} km`],
             ['Inclination', `${formatNumber(summary?.inclination_deg, 2)}°`],
+            ['Design', summary?.design ? `${summary.design.label} (${DESIGN_BASIS[summary.design.basis] ?? summary.design.basis.toLowerCase()})` : '—'],
+            ['Size L × W × H', summary?.design ? `${formatNumber(summary.design.length_m, 1)} × ${formatNumber(summary.design.width_m, 1)} × ${formatNumber(summary.design.height_m, 1)} m` : '—'],
             ['Radius (HBR)', `${summary?.radius_m ?? '—'} m (${(summary?.radius_basis ?? '').toLowerCase().replace(/_/g, ' ')})`],
             ['Covariance', summary?.covariance_source === 'UNAVAILABLE' ? 'unavailable' : `${summary?.covariance_source?.toLowerCase().replace(/_/g, ' ')} σ RTN ${summary?.covariance_sigmas_rtn_m?.map((x) => x.toFixed(0)).join(' / ')} m`],
           ]}
