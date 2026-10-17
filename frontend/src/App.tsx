@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import GlobeView from './globe/GlobeView';
-import EncounterView from './encounter/EncounterView';
-import EncounterControls from './encounter/EncounterControls';
 import LayerControls from './panels/LayerControls';
 import MissionPanel from './panels/MissionPanel';
 import ObjectInspector from './panels/ObjectInspector';
@@ -9,14 +7,7 @@ import TimelineBar from './panels/TimelineBar';
 import TopBar from './panels/TopBar';
 import { controller } from './simulation/controller';
 import { useAppStore } from './store/useAppStore';
-import { Button, Spinner, ViewFrame } from './components/ui';
-
-const STAGE = 'absolute inset-0';
-const MINI = 'absolute left-3 z-10 hidden h-[210px] w-[300px] overflow-hidden rounded border border-line bg-bg shadow-lg transition-[bottom] duration-150 motion-reduce:transition-none md:block';
-const MINI_H = 210;
-const MINI_GAP = 8; // between the minimap and the bottom HUD row (layer panel + timeline)
-const HUD_PAD = 12; // the HUD overlay's p-3
-const MIN_HEADROOM = 140; // space the minimap must leave for the top bar; below that it hides instead of overlapping
+import { Button, Spinner } from './components/ui';
 
 export default function App() {
   const init = useAppStore((s) => s.init);
@@ -29,13 +20,8 @@ export default function App() {
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const loadScenario = useAppStore((s) => s.loadScenario);
   const scenarioId = useAppStore((s) => s.scenarioId);
-  const mainView = useAppStore((s) => s.mainView);
-  const swapMainView = useAppStore((s) => s.swapMainView);
   const missionPanelOpen = useAppStore((s) => s.missionPanelOpen);
   const toggleMissionPanel = useAppStore((s) => s.toggleMissionPanel);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const bottomRowRef = useRef<HTMLDivElement>(null);
-  const [miniLayout, setMiniLayout] = useState({ bottom: 92, hidden: false });
 
   useEffect(() => {
     void init();
@@ -55,74 +41,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Chase mode: hold 1x speed within two minutes of the critical closest approach so the pass is watchable.
-    let restore: number | null = null;
-    const unsub = controller.subscribe((st) => {
-      const { encounterMode, autoSlowNearTca, perception, screening } = useAppStore.getState();
-      if (encounterMode !== 'chase' || !autoSlowNearTca) return;
-      const critical = perception?.objects.find((o) => o.tier === 'CRITICAL' && o.physics.tca_unix !== null)?.physics.tca_unix
-        ?? screening?.conjunctions.find((c) => c.threat_state === 'CRITICAL')?.tca_unix ?? null;
-      if (critical === null) return;
-      const near = Math.abs(critical - st.currentUnix) < 120;
-      if (near && st.playing && st.speed > 1) {
-        restore = st.speed;
-        controller.setSpeed(1);
-      } else if (!near && restore !== null && st.speed === 1) {
-        controller.setSpeed(restore);
-        restore = null;
-      }
-    });
-    return unsub;
-  }, []);
-
-  useEffect(() => {
-    // The minimap floats above the bottom HUD row (layer panel + timeline). Measuring that row makes the
-    // minimap move up when "Globe camera & layers" is expanded instead of being covered by it.
-    const stage = stageRef.current;
-    const row = bottomRowRef.current;
-    if (!stage || !row) return;
-    const update = () => {
-      const bottom = HUD_PAD + Math.round(row.getBoundingClientRect().height) + MINI_GAP;
-      const hidden = stage.clientHeight - bottom - MINI_H < MIN_HEADROOM;
-      setMiniLayout((prev) => (prev.bottom === bottom && prev.hidden === hidden ? prev : { bottom, hidden }));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(stage);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     if (!notice) return;
     const t = setTimeout(dismissNotice, 5000);
     return () => clearTimeout(t);
   }, [notice, dismissNotice]);
 
-  const miniStyle = { bottom: miniLayout.bottom, display: miniLayout.hidden ? 'none' : undefined };
-
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg lg:flex-row">
-      <div ref={stageRef} className={`relative w-full lg:h-full lg:min-h-0 lg:flex-1 ${missionPanelOpen ? 'h-[55vh] min-h-[320px]' : 'min-h-0 flex-1'}`}>
-        <div className={mainView === 'encounter' ? STAGE : MINI} style={mainView === 'encounter' ? undefined : miniStyle}>
-          <ViewFrame mini={mainView !== 'encounter'} label="Encounter" onSwap={swapMainView}>
-            <EncounterView mini={mainView !== 'encounter'} />
-          </ViewFrame>
-        </div>
-        <div className={mainView === 'globe' ? STAGE : MINI} style={mainView === 'globe' ? undefined : miniStyle}>
-          <ViewFrame mini={mainView !== 'globe'} label="Globe" onSwap={swapMainView}>
-            <GlobeView mini={mainView !== 'globe'} />
-          </ViewFrame>
+      <div className={`relative w-full lg:h-full lg:min-h-0 lg:flex-1 ${missionPanelOpen ? 'h-[55vh] min-h-[320px]' : 'min-h-0 flex-1'}`}>
+        <div className="absolute inset-0">
+          <GlobeView />
         </div>
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <TopBar />
             <div className="ml-auto flex flex-col items-end gap-2">
-              <EncounterControls />
               <ObjectInspector />
             </div>
           </div>
-          <div ref={bottomRowRef} className="flex items-end gap-3">
+          <div className="flex items-end gap-3">
             <div className="hidden md:block">
               <LayerControls />
             </div>

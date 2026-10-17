@@ -7,7 +7,7 @@ import { GlobeScene } from './scene';
  * Hosts the Cesium viewer. The scene manager (plain TypeScript) owns every
  * entity; React effects push store changes into it.
  */
-export default function GlobeView({ mini = false }: { mini?: boolean }) {
+export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<GlobeScene | null>(null);
   const scenario = useAppStore((s) => s.scenario);
@@ -79,10 +79,6 @@ export default function GlobeView({ mini = false }: { mini?: boolean }) {
   useEffect(() => {
     if (cameraResetNonce > 0) sceneRef.current?.resetCamera();
   }, [cameraResetNonce]);
-
-  useEffect(() => {
-    sceneRef.current?.setMiniMode(mini);
-  }, [mini]);
 
   return <div ref={containerRef} className="absolute inset-0" aria-label="3D orbital simulation" />;
 }

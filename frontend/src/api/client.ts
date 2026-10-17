@@ -8,8 +8,6 @@ import type {
   HealthResponse,
   ObjectDetail,
   ObjectSummary,
-  PerceptionModelInfo,
-  PerceptionSnapshot,
   PlanResponse,
   ScenarioDetail,
   ScenarioSummary,
@@ -110,9 +108,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ scenario_id: scenarioId, conjunction_id: conjunctionId, mode }),
     }),
-  perception: (scenarioId: string, maneuverId?: string | null, baseline = false) =>
-    request<PerceptionSnapshot>(`/api/perception${qs({ scenario_id: scenarioId, maneuver_id: maneuverId ?? undefined, baseline: baseline ? 'true' : undefined })}`),
-  perceptionModel: () => request<PerceptionModelInfo>('/api/perception/model'),
   simulationState: (scenarioId: string) => request<SimulationState>(`/api/simulation/state${qs({ scenario_id: scenarioId })}`),
   approve: (scenarioId: string, maneuverId: string) =>
     request<DecisionResponse>('/api/simulation/approve', {

@@ -1,6 +1,5 @@
 // Copies Cesium's static runtime assets (workers, widgets CSS, textures) into public/cesium
-// so they are served at /cesium/ in dev and copied into dist/ by the build, and Three's Draco
-// decoder into public/draco for the encounter view's glTF spacecraft models.
+// so they are served at /cesium/ in dev and copied into dist/ by the build.
 import { cpSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -18,15 +17,4 @@ for (const dir of ['Assets', 'Workers', 'ThirdParty', 'Widgets']) {
   if (existsSync(to) && statSync(to).mtimeMs >= statSync(from).mtimeMs) continue;
   cpSync(from, to, { recursive: true });
   console.log(`copied cesium/${dir}`);
-}
-
-const dracoSrc = join(process.cwd(), 'node_modules', 'three', 'examples', 'jsm', 'libs', 'draco', 'gltf');
-const dracoDest = join(process.cwd(), 'public', 'draco');
-if (!existsSync(dracoSrc)) {
-  console.error('Three.js Draco decoder not found. Run `npm install` first.');
-  process.exit(1);
-}
-if (!existsSync(dracoDest) || statSync(dracoDest).mtimeMs < statSync(dracoSrc).mtimeMs) {
-  cpSync(dracoSrc, dracoDest, { recursive: true });
-  console.log('copied draco decoder');
 }

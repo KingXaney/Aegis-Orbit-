@@ -21,8 +21,8 @@ export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
 }
 
-// Path colours follow the encounter view: a glowing teal band for the path the spacecraft will
-// fly, dashed cyan for the original kept for comparison after an approved burn, green candidates.
+// Path colours: a glowing teal band for the path the spacecraft will fly, dashed cyan for the original
+// kept for comparison after an approved burn, green candidates.
 const COLORS = {
   primary: Cesium.Color.fromCssColorString('#67e8f9'),
   planned: Cesium.Color.fromCssColorString('#2dd4bf'),
@@ -40,6 +40,10 @@ const COLORS = {
 const MIN_ZOOM_M = 2;
 // Tracking offset (metres, entity-local frame) for a primary whose model is not available yet.
 const FALLBACK_VIEW_FROM = new Cesium.Cartesian3(-60, 35, 25);
+// Paths look half an orbit ahead: a full orbit closes into a loop whose near and far sides read as two
+// lines on screen. The past trail is a short tail for the same reason.
+const AHEAD_ORBITS = 0.5;
+const TRAIL_ORBITS = 1 / 12;
 
 const SATELLITE_SVG = encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
@@ -76,7 +80,6 @@ export class GlobeScene {
   private candidates: Maneuver[] = [];
   private approvedCandidateId: string | null = null;
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true };
-  private mini = false;
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
@@ -114,6 +117,7 @@ export class GlobeScene {
       skyBox: false,
       skyAtmosphere: false,
       requestRenderMode: false,
+      targetFrameRate: 60,
       // as on the home page: the display's real pixel ratio, MSAA instead of the softening FXAA pass
       useBrowserRecommendedResolution: false,
       msaaSamples: 4,
@@ -236,7 +240,7 @@ export class GlobeScene {
     return new Cesium.PolylineDashMaterialProperty({ color, dashLength: gap, gapColor: Cesium.Color.TRANSPARENT });
   }
 
-  /** The encounter view's ribbon look: a bright core with a soft glow across a wide polyline. */
+  /** The path-band look: a bright core with a soft glow across a wide polyline. */
   private glow(color: Cesium.Color): Cesium.PolylineGlowMaterialProperty {
     return new Cesium.PolylineGlowMaterialProperty({ color, glowPower: 0.22, taperPower: 1 });
   }
@@ -253,7 +257,7 @@ export class GlobeScene {
       backgroundColor: Cesium.Color.fromCssColorString('#0b1220').withAlpha(0.7),
       backgroundPadding: new Cesium.Cartesian2(5, 3),
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      show: new Cesium.CallbackProperty(() => this.layers.labels && !this.mini, false),
+      show: new Cesium.CallbackProperty(() => this.layers.labels, false),
       scaleByDistance: new Cesium.NearFarScalar(1e5, 1.0, 2e7, 0.7),
     };
   }
@@ -349,23 +353,24 @@ export class GlobeScene {
   }
 
   private addPrimaryPath(traj: SampledTrajectory): void {
-    const P = this.periodS;
+    const ahead = this.periodS * AHEAD_ORBITS;
+    const tail = this.periodS * TRAIL_ORBITS;
     const approvedBurn = (): number | null => {
       const approved = this.approvedCandidateId ? this.candidateTrajectories.get(this.approvedCandidateId) : null;
       return approved?.burnTimeUnix ?? null;
     };
-    // Past trail (solid, dim): one orbit behind the current time.
+    // Past trail (solid, dim): a short tail behind the current time.
     const trail = this.viewer.entities.add({
       id: 'path:primary:past',
       polyline: {
-        positions: this.pathPositions(traj, (now) => [now - P, now]),
+        positions: this.pathPositions(traj, (now) => [now - tail, now]),
         width: 1.5,
         material: COLORS.planned.withAlpha(0.3),
         arcType: Cesium.ArcType.NONE,
         show: new Cesium.CallbackProperty(() => this.layers.original, false),
       },
     });
-    // Planned path (the encounter view's teal band): one orbit ahead; with an approved burn ahead it
+    // Planned path (the teal band): half an orbit ahead; with an approved burn ahead it
     // stops at the burn, where the approved candidate's band takes over.
     const planned = this.viewer.entities.add({
       id: 'path:primary:planned',
@@ -373,7 +378,7 @@ export class GlobeScene {
         positions: this.pathPositions(traj, (now) => {
           const burn = approvedBurn();
           if (burn !== null && now >= burn) return null;
-          return [now, burn !== null ? Math.min(now + P, burn) : now + P];
+          return [now, burn !== null ? Math.min(now + ahead, burn) : now + ahead];
         }),
         width: 9,
         material: this.glow(COLORS.planned.withAlpha(0.95)),
@@ -387,7 +392,7 @@ export class GlobeScene {
       polyline: {
         positions: this.pathPositions(traj, (now) => {
           const burn = approvedBurn();
-          return burn !== null && now >= burn ? [now, now + P] : null;
+          return burn !== null && now >= burn ? [now, now + ahead] : null;
         }),
         width: 2,
         material: this.dash(COLORS.primary.withAlpha(0.7)),
@@ -504,12 +509,15 @@ export class GlobeScene {
           id: `cand:${cand.maneuver_id}#path`,
           polyline: {
             positions: this.pathPositions(traj, (now) => {
-              const start = Math.max(burn, now - this.periodS);
-              const end = Math.max(cand.post_tca_unix + 900, now + this.periodS);
+              const ahead = this.periodS * AHEAD_ORBITS;
+              // approved: the trajectory itself, so the planned path's half-orbit horizon from the burn on;
+              // other candidates: from the burn through the closest approach, for comparison
+              const start = isApproved ? Math.max(burn, now) : Math.max(burn, now - this.periodS);
+              const end = isApproved ? now + ahead : Math.max(cand.post_tca_unix + 900, now + ahead);
               return start < end ? [start, end] : null;
             }),
             // approved: the planned path's teal band continues along the maneuvered trajectory;
-            // selected: a green band; other candidates: faint solid green, as in the encounter view
+            // selected: a green band; other candidates: faint solid green
             width: isApproved ? 9 : isSelected ? 7 : 1.5,
             material: isApproved ? this.glow(COLORS.planned.withAlpha(0.95)) : isSelected ? this.glow(color.withAlpha(0.85)) : color.withAlpha(0.4),
             arcType: Cesium.ArcType.NONE,
@@ -567,14 +575,6 @@ export class GlobeScene {
   // ------------------------------------------------------------------ layers / camera
   setLayers(layers: LayerFlags): void {
     this.layers = { ...layers };
-  }
-
-  /** Minimap mode: cheaper rendering, no labels, no scroll zoom. */
-  setMiniMode(mini: boolean): void {
-    this.mini = mini;
-    this.viewer.resolutionScale = mini ? 0.75 : 1;
-    this.viewer.targetFrameRate = mini ? 20 : 60;
-    this.viewer.scene.screenSpaceCameraController.enableZoom = !mini;
   }
 
   /** Track the primary from the default offset (re-tracking makes Cesium apply the offset again). */

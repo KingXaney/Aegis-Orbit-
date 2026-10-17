@@ -19,7 +19,6 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined;
           if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react';
           if (id.includes('node_modules/cesium') || id.includes('node_modules/@cesium')) return 'cesium';
-          if (id.includes('node_modules/three/')) return 'three';
           // Recharts and the packages only it uses. Shared ones (use-sync-external-store, which
           // zustand also uses; d3-array, which d3-geo also uses) go to vendor, or Rollup would put
           // them in this chunk and the explorer would download the simulator's charts.
@@ -33,7 +32,7 @@ export default defineConfig({
       },
     },
   },
-  optimizeDeps: { include: ['cesium', 'three'] },
+  optimizeDeps: { include: ['cesium'] },
   test: {
     environment: 'jsdom',
     globals: true,

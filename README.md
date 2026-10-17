@@ -19,15 +19,15 @@ environment.
 5. Plans candidate maneuvers with a documented grid search and objective (delta-v cost vs. risk reduction).
 6. Re-screens every candidate's post-burn trajectory against the catalog (secondary screening).
 7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
-8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns the tiers shown in the view (CRITICAL / SEMI_CRITICAL / ML_WATCH). The model only ranks; every displayed distance and time is computed.
-9. Visualises the emergency in a Waymo-style **encounter view** (Three.js): a chase camera behind the spacecraft, which is drawn with the same true-scale design model the globe uses (NASA's glTF for the ISS and GPM, part-built for other designs), a glowing path ribbon as wide as the satellite, blue boxes for the nearby semi-critical objects, red-outlined boxes for the critical ones with their relative-motion trails, and the path bending around the debris once a maneuver is selected or approved. Two geometries are available with a toggle: an *encounter map* (ahead = time to closest approach, sideways = true miss offset) and a *true-scale chase camera*. The CesiumJS globe stays available as a minimap that can be swapped to full size.
+8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed.
+9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
 10. Requires explicit human approval before the simulated maneuver is applied.
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19 + TypeScript, Vite 7, CesiumJS 1.146 (globe), Three.js 0.186 (encounter view), Tailwind CSS 4, Recharts 3, Zustand |
+| Frontend | React 19 + TypeScript, Vite 7, CesiumJS 1.146 (globe), Tailwind CSS 4, Recharts 3, Zustand |
 | Backend | Python 3.12, FastAPI, Pydantic 2, NumPy, SciPy, `sgp4`, `xgboost` 3.4 (+ scikit-learn twin), `google-genai` |
 | Data | CelesTrak GP data (committed fixture + optional live refresh), deterministic synthetic scenario |
 | AI | Google Gemini function calling (key stays in the backend); deterministic fallback agent |
@@ -60,7 +60,7 @@ API docs: <http://localhost:8000/docs>. Health: <http://localhost:8000/api/healt
 ```bash
 cd frontend
 npm install
-npm run dev          # copies Cesium's static assets (public/cesium) and Three's Draco decoder (public/draco), starts Vite on :5173
+npm run dev          # copies Cesium's static assets (public/cesium), starts Vite on :5173
 ```
 
 Open <http://localhost:5173> for the catalog explorer: every tracked object on orbit, propagated live
@@ -109,8 +109,8 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
-1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads on the **globe**, the camera following the spacecraft up close, with the **encounter map** as the minimap at the bottom left (⤢ or **Show encounter** swaps the two): the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. Press **Play** (or space). The camera follows the spacecraft from close enough to see its true-scale 3D model, riding its teal path band; drag to orbit around it and scroll out for orbit context (**Reset** returns to the default framing). In the encounter map the spacecraft sits at the bottom of a dark "road" whose lanes are km of miss offset and whose length is time to each object's closest approach; the glowing ribbon is its planned path. Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.
-2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 8.2 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. On the globe, the red marker, danger region and miss vector appear at the predicted TCA; the timeline shows a TCA tick and a countdown. In the encounter map, the perception layer scores the catalog and the critical debris appears far up the road as a red-outlined box with its relative-motion trail; its later, farther passes show up as blue boxes only when they enter the 30-minute near field. Scrub to T−10 min and T−60 s to watch it slide onto the ribbon.
+1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads on the **globe**, the camera following the spacecraft up close: the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. Press **Play** (or space). The camera follows the spacecraft from close enough to see its true-scale 3D model, riding its teal path band; drag to orbit around it and scroll out for orbit context (**Reset** returns to the default framing). Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.
+2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 8.2 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. On the globe, the red marker, danger region and miss vector appear at the predicted TCA; the timeline shows a TCA tick and a countdown. Scrub toward the TCA to watch the debris close on the spacecraft.
 3. Click **Analyze with agent**. The agent calls `list_conjunctions → get_conjunction_details → plan_maneuvers → check_secondary ×3 → generate_report`; the tool execution history, validation checks and narrative appear in the panel. Three candidate burns are drawn in green; the recommended one is highlighted.
 4. Compare candidates in the table and chart (Δv, post-burn miss distance, post-burn Pc, target met, secondary screening status). Click a row or a green path to select it; **Jump to burn** moves the clock to the burn.
 5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision, and the state becomes **MITIGATED**. The teal path band continues along the maneuvered trajectory while the original stays dashed cyan for comparison. **Reject** restores the original. **Reset** returns the scenario to the identical initial state.
@@ -151,7 +151,6 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * **Maneuver planner.** Grid of lead times (0.5–2 orbits) × RTN directions × magnitudes (0.05–0.5 m/s), impulsive burns, objective `J = |Δv|/budget + max(0, log10(Pc_post/Pc_target)) [+ distance shortfall when Pc is unavailable] + penalty if infeasible`; diverse top-3 recommendation. Covariance is assumed unchanged by the burn (documented).
 * **Secondary screening.** The post-burn primary is screened against the whole catalog from the burn time to the window end; new approaches, changed miss distances and completeness are reported. A maneuver is never declared safe just because it clears the original object.
 * **Perception layer** (`backend/app/perception/`). Pairwise features from mean elements only (plane angle, radial separation at the mutual nodes, band overlap, synodic period, phase, epoch age, B*, category); an XGBoost classifier (scikit-learn twin as fallback, null model as last resort) scores every object; `perceive()` physics-screens the altitude band (or, above 1,500 objects, the model's top-K plus the near band), assigns tiers (CRITICAL = threat state CRITICAL/ELEVATED, or miss < 5 km when no probability exists; SEMI_CRITICAL = inside the 25 km screening radius; ML_WATCH = high score but physics-cleared), and returns RTN miss vectors, co-moving relative velocities and ±90 s relative-motion trails along the original, a candidate, or the approved trajectory. Cached per session and invalidated on screening, approval and rejection.
-* **Encounter view** (`frontend/src/encounter/`). Pure, unit-tested projection math (`encounterMap.ts`, `ribbon.ts`, `rtn.ts`) feeds a Three.js scene manager. Map mode: ahead = time to closest approach (linear to 10 min, logarithmic to the ≥ 2-orbit horizon), sideways = the miss offset in the encounter plane (linear to 3 km, logarithmic to the 25 km road edge), ribbon width = spacecraft width = 1 km; the ribbon bends by the lateral RTN displacement between the maneuvered and original trajectories. Chase mode: true relative positions inside 100 km, spacecraft ×10, boxes 250 m. The legend states every schematic scale; printed numbers come from the backend.
 * **Agent integrity.** The LLM only chooses tools and writes prose. `generate_report` fills every numeric field from session records; `validate_report` checks that the recommended maneuver exists, is feasible, meets the target, belongs to the reported threat and passed secondary screening. Tool calls are logged with inputs, status, duration and a summary.
 
 ## API
@@ -189,7 +188,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 │   ├── scripts/train_perception_model.py # labels CelesTrak pairs with the physics screening and trains the ranker
 │   ├── scripts/enable_xgboost_macos.sh   # pip-only OpenMP fix for the xgboost wheel on macOS
 │   └── tests/                            # pytest suite (physics, API, agent)
-├── frontend/src/{api,components,encounter,globe,hooks,lib,panels,simulation,store,types}/
+├── frontend/src/{api,components,globe,hooks,lib,panels,simulation,store,types}/
 └── data/
     ├── cache/                            # downloaded CelesTrak groups (git-ignored)
     ├── models/perception_risk.*          # trained XGBoost + scikit-learn artifacts, metadata, training report
@@ -207,7 +206,6 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Single-user in-memory sessions; restarting the backend clears screenings, plans and decisions (the scenario definitions are deterministic and reload identically).
 * The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
-* The encounter map is a schematic projection (nonlinear time and lateral scales, enlarged objects); the chase camera is true scale apart from the spacecraft model, which is enlarged by the factor its legend states, but, at orbital speeds, an object crosses the 100 km view in about 13 s of simulation time.
 
 ## Data attribution
 
