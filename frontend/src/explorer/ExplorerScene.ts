@@ -1,7 +1,7 @@
 import * as Cesium from 'cesium';
 import type { CatalogObject, CatalogObjectType, OrbitClass } from '../types/api';
 import { EARTH_COLORS, buildEarthTexture } from './earthTexture';
-import { TYPE_COLOR } from './filters';
+import { MODEL_COLOR, MODEL_NORAD_ID, TYPE_COLOR } from './filters';
 import { STRIDE, gmst } from './propagation';
 
 // Catalog globe. Every object is a point primitive positioned in TEME (metres); the point, polyline,
@@ -23,6 +23,14 @@ const COLORS: Record<CatalogObjectType, Cesium.Color> = {
 const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 3, ROCKET_BODY: 3.5 };
 const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.85, ROCKET_BODY: 0.95 };
 const SELECTED_SIZE = 8;
+// The model spacecraft: a green dot larger than the rest, a soft steady halo so it can be found at a
+// glance, and two staggered ripples that grow and fade so one is always on screen.
+const MODEL = Cesium.Color.fromCssColorString(MODEL_COLOR);
+const MODEL_SIZE = 6;
+const HALO_SIZE = 14;
+const PULSE_PERIOD_S = 2;
+const PULSE_START_PX = 6;
+const PULSE_END_PX = 34;
 const DIMMED_ALPHA = 0.3;
 const ROTATE_RAD_S = 0.05; // about one turn every two minutes
 const IDLE_BEFORE_ROTATE_S = 10;
@@ -46,6 +54,9 @@ export class ExplorerScene {
   readonly viewer: Cesium.Viewer;
   private readonly callbacks: ExplorerSceneCallbacks;
   private readonly points: Cesium.PointPrimitiveCollection;
+  private readonly pulse: Cesium.PointPrimitiveCollection;
+  private readonly pulseHalo: Cesium.PointPrimitive;
+  private readonly pulseRings: Cesium.PointPrimitive[];
   private readonly markers: Cesium.BillboardCollection;
   private readonly paths: Cesium.PolylineCollection;
   private readonly labels: Cesium.LabelCollection;
@@ -58,6 +69,7 @@ export class ExplorerScene {
 
   private objects: CatalogObject[] = [];
   private dots: Cesium.PointPrimitive[] = [];
+  private modelIndex: number | null = null;
   private destroyed = false;
   private earthTextureUrl: string | null = null;
   private state: Float32Array | null = null;
@@ -122,6 +134,12 @@ export class ExplorerScene {
     scene.screenSpaceCameraController.minimumZoomDistance = 300_000;
     scene.screenSpaceCameraController.maximumZoomDistance = 150_000_000;
 
+    // Added first so the ring draws beneath the dots.
+    this.pulse = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    this.pulseHalo = this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: HALO_SIZE, color: MODEL.withAlpha(0.28), show: false });
+    this.pulseRings = [0, 1].map(() =>
+      this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: PULSE_START_PX, color: Cesium.Color.TRANSPARENT, outlineColor: MODEL, outlineWidth: 2, show: false }),
+    );
     this.points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
     this.paths = scene.primitives.add(new Cesium.PolylineCollection());
     this.markers = scene.primitives.add(new Cesium.BillboardCollection({ scene }));
@@ -192,7 +210,8 @@ export class ExplorerScene {
 
   private pickIndex(position: Cesium.Cartesian2): number | null {
     const picked = this.viewer.scene.pick(position, 9, 9);
-    return picked && picked.collection === this.points && typeof picked.id === 'number' ? picked.id : null;
+    if (!picked || typeof picked.id !== 'number') return null;
+    return picked.collection === this.points || picked.collection === this.pulse ? picked.id : null;
   }
 
   // ------------------------------------------------------------------ data
@@ -204,13 +223,20 @@ export class ExplorerScene {
     this.state = null;
     this.selected = null;
     this.introStart = null;
-    this.dots = objects.map((o, i) =>
+    const model = objects.findIndex((o) => o.norad_id === MODEL_NORAD_ID);
+    this.modelIndex = model >= 0 ? model : null;
+    for (const p of [this.pulseHalo, ...this.pulseRings]) {
+      p.id = this.modelIndex;
+      p.show = false;
+    }
+    this.dots = objects.map((_, i) =>
       this.points.add({
         id: i,
         position: new Cesium.Cartesian3(),
-        pixelSize: SIZE[o.type],
-        color: COLORS[o.type].withAlpha(ALPHA[o.type]),
-        scaleByDistance: new Cesium.NearFarScalar(2e6, 1.6, 8e7, 0.8),
+        pixelSize: this.baseSize(i),
+        color: this.baseColor(i).withAlpha(this.baseAlpha(i)),
+        // The model spacecraft keeps its size at every zoom so it stays easy to find.
+        scaleByDistance: i === this.modelIndex ? undefined : new Cesium.NearFarScalar(2e6, 1.6, 8e7, 0.8),
         show: false,
       }),
     );
@@ -229,7 +255,8 @@ export class ExplorerScene {
 
   setSelected(index: number | null): void {
     this.selected = index;
-    this.ring.show = index !== null;
+    // The model spacecraft's own pulse marks it; the white ring would sit on top of it.
+    this.ring.show = index !== null && index !== this.modelIndex;
     this.selectedLabel.show = index !== null;
     if (index !== null) this.selectedLabel.text = this.objects[index].name;
     this.hoverLabel.show = false;
@@ -247,7 +274,7 @@ export class ExplorerScene {
       this.paths.add({
         positions,
         width: isSelected ? 2 : 1,
-        material: Cesium.Material.fromType('Color', { color: COLORS[o.type].withAlpha(isSelected ? 0.95 : 0.3) }),
+        material: Cesium.Material.fromType('Color', { color: this.baseColor(index).withAlpha(isSelected ? 0.95 : 0.3) }),
       });
     }
   }
@@ -295,6 +322,7 @@ export class ExplorerScene {
     Cesium.Matrix3.fromRotationZ(-gmst(now), this.scratchM3);
     Cesium.Matrix4.fromRotation(this.scratchM3, this.rotation);
     Cesium.Matrix4.clone(this.rotation, this.points.modelMatrix);
+    Cesium.Matrix4.clone(this.rotation, this.pulse.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.paths.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.markers.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.labels.modelMatrix);
@@ -316,6 +344,7 @@ export class ExplorerScene {
       if (visible) b.position = pos;
     }
     if (this.introStart !== null) this.stepIntro(t - this.introStart);
+    this.stepPulse(t, dt);
     for (const [label, index] of [[this.hoverLabel, this.hovered], [this.selectedLabel, this.selected]] as const) {
       if (index !== null && label.show && this.temePosition(index, dt, pos)) label.position = pos;
     }
@@ -323,6 +352,38 @@ export class ExplorerScene {
   }
 
   // ------------------------------------------------------------------ colour
+
+  private baseColor(i: number): Cesium.Color {
+    return i === this.modelIndex ? MODEL : COLORS[this.objects[i].type];
+  }
+
+  private baseAlpha(i: number): number {
+    return i === this.modelIndex ? 1 : ALPHA[this.objects[i].type];
+  }
+
+  private baseSize(i: number): number {
+    return i === this.modelIndex ? MODEL_SIZE : SIZE[this.objects[i].type];
+  }
+
+  /** The model spacecraft's halo and ripples (held still under reduced motion). */
+  private stepPulse(t: number, dt: number): void {
+    const i = this.modelIndex;
+    const visible = i !== null && this.dots[i].show && this.introStart === null && this.temePosition(i, dt, this.scratchPos) !== null;
+    const parts = [this.pulseHalo, ...this.pulseRings];
+    for (const p of parts) if (p.show !== visible) p.show = visible;
+    if (!visible) return;
+    for (const p of parts) p.position = this.scratchPos;
+    const dim = this.selected !== null && i !== this.selected ? DIMMED_ALPHA : 1;
+    this.pulseHalo.color = Cesium.Color.clone(MODEL, this.scratchColor).withAlpha(0.28 * dim, this.scratchColor);
+    this.pulseRings.forEach((ring, k) => {
+      const phase = this.reducedMotion ? 0.35 + k * 0.3 : ((t / PULSE_PERIOD_S + k / this.pulseRings.length) % 1);
+      ring.pixelSize = PULSE_START_PX + phase * (PULSE_END_PX - PULSE_START_PX);
+      const a = (1 - phase) * dim;
+      // Fresh colours: the getters return the primitive's own objects, and assigning those back is a no-op.
+      ring.outlineColor = MODEL.withAlpha(0.9 * a);
+      ring.color = MODEL.withAlpha(0.18 * a);
+    });
+  }
 
   /** Shells light up from the Earth outward; the GEO belt closes into a ring by longitude. */
   private startIntro(): void {
@@ -347,9 +408,8 @@ export class ExplorerScene {
     }
     for (let i = 0; i < this.dots.length; i++) {
       const a = Math.min(Math.max((elapsed - this.introDelay[i]) / INTRO_FADE_S, 0), 1);
-      const type = this.objects[i].type;
-      const c = Cesium.Color.clone(COLORS[type], this.scratchColor);
-      c.alpha = a * ALPHA[type];
+      const c = Cesium.Color.clone(this.baseColor(i), this.scratchColor);
+      c.alpha = a * this.baseAlpha(i);
       this.dots[i].color = c;
     }
   }
@@ -359,12 +419,11 @@ export class ExplorerScene {
     const dim = this.selected !== null;
     for (let i = 0; i < this.dots.length; i++) {
       const b = this.dots[i];
-      const type = this.objects[i].type;
-      const c = Cesium.Color.clone(COLORS[type], this.scratchColor);
+      const c = Cesium.Color.clone(this.baseColor(i), this.scratchColor);
       const isSelected = i === this.selected;
-      c.alpha = dim && !isSelected ? DIMMED_ALPHA * ALPHA[type] : ALPHA[type];
+      c.alpha = dim && !isSelected ? DIMMED_ALPHA * this.baseAlpha(i) : this.baseAlpha(i);
       b.color = c;
-      b.pixelSize = isSelected ? SELECTED_SIZE : SIZE[type];
+      b.pixelSize = isSelected ? SELECTED_SIZE : this.baseSize(i);
     }
   }
 

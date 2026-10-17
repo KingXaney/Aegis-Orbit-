@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
-import { ORBIT_CLASS_LABEL, TYPE_COLOR, TYPE_LABEL } from './filters';
+import { MODEL_COLOR, MODEL_NORAD_ID, ORBIT_CLASS_LABEL, TYPE_COLOR, TYPE_LABEL } from './filters';
 import { ownerName } from './owners';
 import { useExplorerStore } from './store';
 
@@ -66,6 +66,13 @@ export default function DetailsCard() {
           <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" /></svg>
         </button>
       </div>
+
+      {o.norad_id === MODEL_NORAD_ID && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-[12px] leading-snug" style={{ borderColor: `${MODEL_COLOR}55`, background: `${MODEL_COLOR}12` }}>
+          <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: MODEL_COLOR, boxShadow: `0 0 8px ${MODEL_COLOR}` }} aria-hidden="true" />
+          <span>This is the satellite Aegis Orbit uses as its model spacecraft.</span>
+        </p>
+      )}
 
       <dl className="mt-4 grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2.5">
         <Row label="NORAD ID">{o.norad_id}</Row>
