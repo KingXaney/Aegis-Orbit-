@@ -29,7 +29,7 @@ const PULSE_START_PX = 6;
 const PULSE_END_PX = 34;
 const DIMMED_ALPHA = 0.3;
 const ROTATE_RAD_S = 0.05; // about one turn every two minutes
-const IDLE_BEFORE_ROTATE_S = 10;
+const IDLE_BEFORE_ROTATE_S = 3;
 const INTRO_DELAY_S: Record<OrbitClass, number> = { LEO: 0, MEO: 0.35, HEO: 0.5, GEO: 0.7 };
 const INTRO_GEO_SWEEP_S = 0.6;
 const INTRO_FADE_S = 0.5;
@@ -148,8 +148,12 @@ export class ExplorerScene {
   private readonly onInteract = () => {
     this.lastInteraction = performance.now() / 1000;
   };
-  private readonly onPointerMove = (e: PointerEvent) => {
-    if (e.buttons) this.onInteract();
+  // Any pointer movement holds the spin; it resumes once the pointer has been still for a few seconds.
+  private readonly onPointerMove = () => this.onInteract();
+  private readonly onPointerLeave = () => {
+    this.hovered = null;
+    this.hoverLabel.show = false;
+    this.viewer.scene.canvas.style.cursor = '';
   };
 
   constructor(container: HTMLElement, callbacks: ExplorerSceneCallbacks) {
@@ -238,6 +242,7 @@ export class ExplorerScene {
     const canvas = scene.canvas;
     canvas.addEventListener('pointerdown', this.onInteract);
     canvas.addEventListener('pointermove', this.onPointerMove);
+    canvas.addEventListener('pointerleave', this.onPointerLeave);
     canvas.addEventListener('wheel', this.onInteract, { passive: true });
     canvas.addEventListener('touchstart', this.onInteract, { passive: true });
 
@@ -530,7 +535,7 @@ export class ExplorerScene {
     const frameDt = Math.min(t - this.lastFrame, 0.25);
     this.lastFrame = t;
     if (this.revealStart !== null) this.stepReveal(t - this.revealStart);
-    if (!this.reducedMotion && this.selected === null && this.approach === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
+    if (!this.reducedMotion && this.selected === null && this.approach === null && this.hovered === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
       this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -ROTATE_RAD_S * frameDt);
     }
 
@@ -657,6 +662,7 @@ export class ExplorerScene {
     const canvas = this.viewer.scene.canvas;
     canvas.removeEventListener('pointerdown', this.onInteract);
     canvas.removeEventListener('pointermove', this.onPointerMove);
+    canvas.removeEventListener('pointerleave', this.onPointerLeave);
     canvas.removeEventListener('wheel', this.onInteract);
     canvas.removeEventListener('touchstart', this.onInteract);
     this.removePreUpdate();
