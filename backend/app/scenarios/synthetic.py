@@ -2,13 +2,17 @@
 
 Construction (all constants, no randomness, so every reset is identical):
 
-1. The primary "AEGIS-1" starts on a circular 420 km, 51.6 deg orbit at T0 and
+1. The primary, a synthetic-state stand-in for NASA's GPM Core Observatory
+   (which flies at ~407 km, 65 deg and maintains its orbit with hydrazine
+   thrusters), starts on a circular 407 km, 65 deg orbit at T0 and
    is propagated with the two-body + J2 model to the designed encounter time
    TCA = T0 + 3 h. Its state there is P*.
 2. The secondary debris object is *defined at TCA*: its position is P* plus a
    designed miss vector (0.35 km horizontal, 0.05 km radial) and its velocity
-   is the primary's velocity rotated 60 deg about the local radial axis, so the
-   two orbits cross at high relative speed (~7.7 km/s).
+   is the primary's velocity rotated 65 deg about the local radial axis, so the
+   two orbits cross at high relative speed (~8.2 km/s). (At 60 deg in GPM's orbit
+   the recommended burn nudged a benign repeat pass of the same debris inside the
+   screening radius; 65 deg keeps the scenario's "no new conjunctions" property.)
 3. That TCA state is propagated **backwards** with the same model to T0, which
    becomes the secondary's initial state. Forward propagation therefore
    reproduces the encounter exactly up to integrator error (sub-metre).
@@ -25,7 +29,7 @@ from typing import Dict, List
 import numpy as np
 
 from ..data.catalog import Catalog, OrbitalObject
-from ..data.spacecraft import BOX_WING_BUS, DEBRIS_FRAGMENT, SpacecraftDesign
+from ..data.spacecraft import DEBRIS_FRAGMENT, KNOWN_DESIGNS_BY_NORAD, SpacecraftDesign
 from ..physics.frames import circular_state, osculating_elements, rtn_basis
 from ..physics.propagation import MODEL_NUMERICAL, propagate_states
 from ..physics.time_utils import iso, to_unix
@@ -35,26 +39,23 @@ T0 = datetime(2026, 10, 17, 0, 0, 0, tzinfo=timezone.utc)
 T0_UNIX = to_unix(T0)
 WINDOW_HOURS = 6.0
 TCA_OFFSET_S = 3.0 * 3600.0
-PRIMARY_ID = "SYN-AEGIS-1"
+PRIMARY_ID = "SYN-GPM"
 SECONDARY_ID = "SYN-DEB-2047"
 
-PRIMARY_ALT_KM = 420.0
-PRIMARY_INC_DEG = 51.6
+PRIMARY_ALT_KM = 407.0
+PRIMARY_INC_DEG = 65.0
 PRIMARY_RAAN_DEG = 40.0
 PRIMARY_ARG_LAT_DEG = 15.0
-CROSSING_ANGLE_DEG = 60.0
+CROSSING_ANGLE_DEG = 65.0
 MISS_HORIZONTAL_KM = 0.35
 MISS_RADIAL_KM = 0.05
 STEP_S = 10.0
 
 R_EARTH_KM = 6378.137
 
-# Envelopes (in-track x cross-track x radial, metres) chosen to fit inside each object's hard-body radius.
-PRIMARY_DESIGN = SpacecraftDesign(
-    design_id=BOX_WING_BUS, label="AEGIS-1 smallsat (bus + two solar arrays)",
-    length_m=2.4, width_m=14.0, height_m=2.2, basis="SCENARIO_DEFINITION",
-    reference="synthetic scenario definition: 2.4 x 2.2 m bus, arrays spanning 14 m",
-)
+# The primary uses GPM's published design (NORAD 39574). The secondary's envelope (in-track x
+# cross-track x radial, metres) is chosen to fit inside its hard-body radius.
+PRIMARY_DESIGN = KNOWN_DESIGNS_BY_NORAD[39574]
 SECONDARY_DESIGN = SpacecraftDesign(
     design_id=DEBRIS_FRAGMENT, label="DEB-2047 structural fragment",
     length_m=3.6, width_m=1.8, height_m=0.5, basis="SCENARIO_DEFINITION",
@@ -106,7 +107,7 @@ def build_synthetic_catalog() -> Catalog:
     # 3. back-propagate the secondary to T0
     y_s0 = propagate_states(np.concatenate([r_st, v_st])[None, :], tca_unix, np.array([T0_UNIX]), STEP_S)[0, 0]
 
-    primary = _numerical_object(PRIMARY_ID, "AEGIS-1 (synthetic primary)", "PAYLOAD", r_p0, v_p0, T0_UNIX,
+    primary = _numerical_object(PRIMARY_ID, "GPM Core Observatory (synthetic state)", "PAYLOAD", r_p0, v_p0, T0_UNIX,
                                 radius_m=7.5, sigmas_rtn_m=(60.0, 200.0, 60.0), position_basis="SYNTHETIC_STATE")
     primary.design_override = PRIMARY_DESIGN
     secondary = _numerical_object(SECONDARY_ID, "DEB-2047 (synthetic debris)", "DEBRIS", y_s0[:3], y_s0[3:], T0_UNIX,

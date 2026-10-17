@@ -4,11 +4,12 @@ import { PART_COLORS, designParts, type Axis, type Part } from './designs';
 
 /**
  * Detailed glTF models for designs that have one, already in metres in the body frame (x along
- * velocity, y cross-track, z radial); see scripts/prepare_iss_model.py. `nativeWidthM` is the
+ * velocity, y cross-track, z radial); see scripts/prepare_models.py. `nativeWidthM` is the
  * model's cross-track span, so the model is scaled uniformly to the design's published width.
  */
 const MODEL_ASSETS: Record<string, { url: string; nativeWidthM: number; credit: string }> = {
   iss: { url: `${import.meta.env.BASE_URL}models/iss.glb`, nativeWidthM: 109, credit: 'NASA/Michael D. Carbajal' },
+  gpm: { url: `${import.meta.env.BASE_URL}models/gpm.glb`, nativeWidthM: 13, credit: 'NASA/Christopher R. Meaney' },
 };
 
 /** Smallest on-screen size (pixels across the envelope) at which the 3D model replaces the marker. */
@@ -45,7 +46,7 @@ function partInstance(part: Part): Cesium.GeometryInstance {
 }
 
 /**
- * True-scale spacecraft model. Designs with a detailed glTF asset (the ISS) load it; every other
+ * True-scale spacecraft model. Designs with a detailed glTF asset (ISS, GPM) load it; every other
  * design is built from the parts in designs.ts, which also stand in while the glTF loads. Sizes
  * come from the backend's design record. One static primitive per spacecraft; its model
  * matrix is updated every frame from the position and velocity (x along velocity, z radial), which

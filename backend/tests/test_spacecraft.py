@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from app.data.spacecraft import ISS, KNOWN_DESIGNS_BY_NORAD, design_for, generic_design
+from app.data.spacecraft import GPM, ISS, KNOWN_DESIGNS_BY_NORAD, design_for, generic_design
 from app.data.tle import parse_tle_text
 from app.scenarios import real, synthetic
 
@@ -37,10 +37,20 @@ def test_iss_hard_body_radius_is_consistent_with_its_envelope():
     assert max(iss.length_m, iss.width_m, iss.height_m) / 2 <= hbr <= iss.envelope_radius_m
 
 
-def test_synthetic_designs_fit_inside_hard_body_radius(synthetic_catalog):
-    for oid in (synthetic.PRIMARY_ID, synthetic.SECONDARY_ID):
-        obj = synthetic_catalog.require(oid)
-        assert obj.design.basis == "SCENARIO_DEFINITION"
-        assert obj.design.envelope_radius_m <= obj.radius_m
+def test_synthetic_designs_match_their_hard_body_radius(synthetic_catalog):
+    primary = synthetic_catalog.require(synthetic.PRIMARY_ID)
+    # the primary is GPM: published design, HBR between half its longest side and its bounding sphere
+    assert primary.design == KNOWN_DESIGNS_BY_NORAD[39574] and primary.design.basis == "PUBLISHED_SPEC"
+    d = primary.design
+    assert max(d.length_m, d.width_m, d.height_m) / 2 <= primary.radius_m <= d.envelope_radius_m
+    secondary = synthetic_catalog.require(synthetic.SECONDARY_ID)
+    assert secondary.design.basis == "SCENARIO_DEFINITION"
+    assert secondary.design.envelope_radius_m <= secondary.radius_m
     for obj in synthetic_catalog.values():
         assert obj.design.length_m > 0 and obj.design.width_m > 0 and obj.design.height_m > 0
+
+
+def test_gpm_in_the_real_catalog_uses_its_published_design():
+    obj = parse_tle_text((real.FIXTURE_TLE).read_text())[0]
+    gpm = next(o for o in obj if o.norad_id == 39574)
+    assert gpm.design.design_id == GPM and gpm.design.width_m == 13.0

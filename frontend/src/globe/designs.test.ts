@@ -9,6 +9,7 @@ const design = (design_id: string, length_m: number, width_m: number, height_m: 
 const CASES = [
   design('iss', 73, 109, 20),
   design('box-wing-bus', 2.4, 14, 2.2),
+  design('gpm', 6.5, 13, 5),
   design('compact-bus', 2, 1.7, 1.6),
   design('debris-fragment', 3.6, 1.8, 0.5),
   design('rocket-body', 9, 2.9, 2.9),

@@ -192,6 +192,7 @@ function debrisFragment(L: number, W: number, H: number): Part[] {
 const BUILDERS: Record<string, (L: number, W: number, H: number) => Part[]> = {
   iss,
   'box-wing-bus': boxWingBus,
+  gpm: boxWingBus, // placeholder until the NASA glTF loads
   'compact-bus': compactBus,
   'rocket-body': rocketBody,
   'debris-fragment': debrisFragment,

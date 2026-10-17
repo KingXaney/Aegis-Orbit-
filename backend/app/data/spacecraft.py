@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, Tuple
 
 # design_id values the frontend knows how to draw
 ISS = "iss"
+GPM = "gpm"  # GPM Core Observatory
 BOX_WING_BUS = "box-wing-bus"  # bus with two deployable solar arrays
 COMPACT_BUS = "compact-bus"  # bus with body-mounted cells, no arrays
 ROCKET_BODY = "rocket-body"  # spent upper stage: cylinder, nozzle, interstage
@@ -52,6 +53,12 @@ KNOWN_DESIGNS_BY_NORAD: Dict[int, SpacecraftDesign] = {
         length_m=73.0, width_m=109.0, height_m=20.0, basis="PUBLISHED_SPEC",
         reference="NASA ISS facts and figures: 109 m integrated truss (cross-track) x 73 m pressurized "
                   "modules (in-track) x about 20 m",
+    ),
+    39574: SpacecraftDesign(
+        design_id=GPM, label="GPM Core Observatory",
+        length_m=6.5, width_m=13.0, height_m=5.0, basis="PUBLISHED_SPEC",
+        reference="eoPortal GPM: 13 m x 6.5 m x 5 m deployed; 13 m is the solar array span (cross-track), "
+                  "the in-track/radial assignment of 6.5 m and 5 m is assumed",
     ),
 }
 
