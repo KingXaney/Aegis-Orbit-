@@ -11,7 +11,9 @@ import type { SpacecraftDesign } from '../types/api';
 export type Vec3 = [number, number, number];
 export type Axis = 'x' | 'y' | 'z';
 
-export type PartColor = 'module' | 'truss' | 'radiator' | 'issArray' | 'array' | 'mli' | 'antenna' | 'stage' | 'nozzle' | 'debris' | 'debrisDark';
+export type PartColor =
+  | 'module' | 'truss' | 'radiator' | 'issArray' | 'array' | 'mli' | 'antenna' | 'stage' | 'nozzle' | 'debris' | 'debrisDark'
+  | 'cell' | 'panelFrame' | 'panelBack' | 'mliSilver' | 'deck' | 'baffle' | 'lens' | 'hinge';
 
 export type Part =
   | { kind: 'box'; center: Vec3; size: Vec3; color: PartColor }
@@ -30,6 +32,14 @@ export const PART_COLORS: Record<PartColor, string> = {
   nozzle: '#475569',
   debris: '#94a3b8',
   debrisDark: '#64748b',
+  cell: '#14245c', // triple-junction cells
+  panelFrame: '#aeb4bf',
+  panelBack: '#e8e6df',
+  mliSilver: '#c9ccd3',
+  deck: '#9aa1ab',
+  baffle: '#16181d',
+  lens: '#0a0f1e',
+  hinge: '#6b7280',
 };
 
 const box = (center: Vec3, size: Vec3, color: PartColor): Part => ({ kind: 'box', center, size, color });
@@ -63,20 +73,90 @@ function iss(L: number, W: number, H: number): Part[] {
   return parts;
 }
 
-/** Bus with a nadir/zenith antenna and two deployable solar arrays on cross-track booms. */
+/**
+ * Earth-observing smallsat: gold-MLI bus with white radiators fore and aft, a nadir instrument and
+ * high-gain dish, zenith star trackers and GPS antenna, aft thrusters, and two deployable wings of
+ * three hinged panels each, every panel carrying a grid of cells on its sun (zenith) face.
+ */
 function boxWingBus(L: number, W: number, H: number): Part[] {
-  const busZ = 0.82 * H;
+  const nadirH = 0.12 * H; // instrument and dish below the bus
+  const zenithH = 0.06 * H; // star trackers and antennas above the bus
+  const busZ = H - nadirH - zenithH;
   const busY = Math.min(0.22 * W, Math.max(L, busZ));
-  const busCenterZ = -H / 2 + busZ / 2;
-  const gap = 0.03 * W;
-  const arraySpan = (W - busY) / 2 - gap;
+  const busX = 0.92 * L; // radiators and thrusters stand proud of the bus fore and aft
+  const bottom = -H / 2 + nadirH;
+  const top = bottom + busZ;
+  const zc = (bottom + top) / 2;
+  const m = Math.min(busX, busY); // reference size for bus-mounted hardware
   const parts: Part[] = [
-    box([0, 0, busCenterZ], [L, busY, busZ], 'mli'),
-    cyl([0, 0, H / 2 - (H - busZ) / 2], 'z', H - busZ, 0.3 * Math.min(L, busY), 'antenna'),
+    box([0, 0, zc], [busX, busY, busZ], 'mli'),
+    box([0, 0, top - 0.01 * busZ], [busX * 1.001, busY * 1.001, 0.02 * busZ], 'mliSilver'), // zenith deck edge
+    box([0, 0, bottom + 0.01 * busZ], [busX * 1.001, busY * 1.001, 0.02 * busZ], 'deck'), // nadir deck
   ];
+  // radiators on the fore/aft faces
+  for (const fore of [1, -1]) {
+    parts.push(box([fore * (busX / 2 + 0.01 * L), 0, zc], [0.02 * L, 0.8 * busY, 0.75 * busZ], 'radiator'));
+  }
+  // aft thrusters at the four corners of the aft face
+  for (const y of [1, -1]) {
+    for (const z of [1, -1]) {
+      parts.push(cyl([-busX / 2 - 0.02 * L, y * 0.38 * busY, zc + z * 0.38 * busZ], 'x', 0.04 * L, 0.025 * m, 'nozzle', 0.05 * m));
+    }
+  }
+  // nadir instrument: telescope barrel with a dark aperture
+  const scopeR = 0.2 * m;
+  parts.push(cyl([0.12 * busX, 0, bottom - nadirH / 2], 'z', nadirH * 0.96, scopeR, 'mliSilver'));
+  parts.push(cyl([0.12 * busX, 0, -H / 2 + 0.01 * nadirH], 'z', 0.02 * nadirH, 0.85 * scopeR, 'lens'));
+  // high-gain dish on a short mast at the aft-nadir corner (cone opening toward nadir)
+  const dishR = 0.16 * m;
+  parts.push(box([-0.3 * busX, 0.25 * busY, bottom - 0.3 * nadirH], [0.03 * m, 0.03 * m, 0.6 * nadirH], 'hinge'));
+  parts.push(cyl([-0.3 * busX, 0.25 * busY, -H / 2 + 0.2 * nadirH], 'z', 0.4 * nadirH, 0.15 * dishR, 'antenna', dishR));
+  // zenith: two star trackers with black baffles, GPS patch, sun sensors
+  for (const y of [1, -1]) {
+    parts.push(cyl([-0.25 * busX, y * 0.25 * busY, top + zenithH / 2], 'z', zenithH, 0.09 * m, 'baffle', 0.06 * m));
+  }
+  parts.push(cyl([0.25 * busX, 0, top + 0.15 * zenithH], 'z', 0.3 * zenithH, 0.12 * m, 'antenna'));
+  for (const x of [1, -1]) parts.push(box([x * 0.4 * busX, 0, top + 0.2 * zenithH], [0.05 * m, 0.05 * m, 0.4 * zenithH], 'baffle'));
+
+  // deployable wings
+  const span = (W - busY) / 2;
+  const yoke = 0.1 * span;
+  const gap = 0.012 * span;
+  const panels = 3;
+  const panelSpan = (span - yoke - gap * panels) / panels;
+  const panelX = 0.85 * L;
+  const t = Math.max(0.015, 0.01 * L); // panel thickness
+  const cellsX = 8;
+  const cellsY = 6;
   for (const side of [1, -1]) {
-    parts.push(box([0, side * (busY / 2 + gap / 2), busCenterZ], [0.05 * L, gap, 0.05 * L], 'truss'));
-    parts.push(box([0, side * (W / 2 - arraySpan / 2), busCenterZ], [0.85 * L, arraySpan, Math.max(0.02, 0.02 * H)], 'array'));
+    const root = busY / 2;
+    // yoke: two struts from the bus side to the inboard panel, plus the drive at the bus wall
+    parts.push(box([0, side * (root + 0.02 * span), zc], [0.12 * L, 0.04 * span, 0.12 * L], 'hinge'));
+    for (const x of [1, -1]) {
+      parts.push(box([x * 0.3 * panelX, side * (root + yoke / 2), zc], [0.03 * L, yoke, 0.03 * L], 'panelFrame'));
+    }
+    for (let i = 0; i < panels; i++) {
+      const y0 = root + yoke + gap / 2 + i * (panelSpan + gap);
+      const yc = side * (y0 + panelSpan / 2);
+      parts.push(box([0, yc, zc], [panelX, panelSpan, t], 'panelFrame'));
+      parts.push(box([0, yc, zc - 0.25 * t], [0.98 * panelX, 0.98 * panelSpan, 0.5 * t], 'panelBack'));
+      // cells on the sun face, with frame showing between them
+      const pitchX = (0.96 * panelX) / cellsX;
+      const pitchY = (0.94 * panelSpan) / cellsY;
+      for (let cx = 0; cx < cellsX; cx++) {
+        for (let cy = 0; cy < cellsY; cy++) {
+          parts.push(box(
+            [-0.48 * panelX + (cx + 0.5) * pitchX, yc - side * 0.47 * panelSpan + side * (cy + 0.5) * pitchY, zc + 0.5 * t + 0.05 * t],
+            [0.92 * pitchX, 0.9 * pitchY, 0.1 * t],
+            'cell',
+          ));
+        }
+      }
+      // hinges to the next panel (or the yoke)
+      for (const x of [1, -1]) {
+        parts.push(box([x * 0.3 * panelX, side * (y0 - gap / 2), zc], [0.04 * L, gap * 1.6, 1.4 * t], 'hinge'));
+      }
+    }
   }
   return parts;
 }

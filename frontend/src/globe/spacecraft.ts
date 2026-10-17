@@ -2,6 +2,15 @@ import * as Cesium from 'cesium';
 import type { SpacecraftDesign } from '../types/api';
 import { PART_COLORS, designParts, type Axis, type Part } from './designs';
 
+/**
+ * Detailed glTF models for designs that have one, already in metres in the body frame (x along
+ * velocity, y cross-track, z radial); see scripts/prepare_iss_model.py. `nativeWidthM` is the
+ * model's cross-track span, so the model is scaled uniformly to the design's published width.
+ */
+const MODEL_ASSETS: Record<string, { url: string; nativeWidthM: number; credit: string }> = {
+  iss: { url: `${import.meta.env.BASE_URL}models/iss.glb`, nativeWidthM: 109, credit: 'NASA/Michael D. Carbajal' },
+};
+
 /** Smallest on-screen size (pixels across the envelope) at which the 3D model replaces the marker. */
 const MIN_MODEL_PIXELS = 6;
 
@@ -36,8 +45,9 @@ function partInstance(part: Part): Cesium.GeometryInstance {
 }
 
 /**
- * True-scale spacecraft model built from the parts of the object's design (see designs.ts), whose
- * envelope comes from the backend's design record. One static primitive per spacecraft; its model
+ * True-scale spacecraft model. Designs with a detailed glTF asset (the ISS) load it; every other
+ * design is built from the parts in designs.ts, which also stand in while the glTF loads. Sizes
+ * come from the backend's design record. One static primitive per spacecraft; its model
  * matrix is updated every frame from the position and velocity (x along velocity, z radial), which
  * is far cheaper and more predictable than per-frame dynamic entity geometry. The model is shown
  * only once it is big enough on screen to read; until then the scene draws a marker instead.
@@ -46,7 +56,13 @@ export class SpacecraftModel {
   readonly design: SpacecraftDesign;
   readonly envelopeRadiusM: number;
   private readonly scene: Cesium.Scene;
+  /** Part-based model: the whole model for most designs, a placeholder while a glTF loads. */
   private primitive: Cesium.Primitive | null;
+  private gltf: Cesium.Model | null = null;
+  private gltfScale = 1;
+  private destroyed = false;
+  private readonly matrix = new Cesium.Matrix4();
+  private readonly scaleMatrix = new Cesium.Matrix4();
   private readonly rotation = new Cesium.Matrix3();
   private readonly x = new Cesium.Cartesian3();
   private readonly y = new Cesium.Cartesian3();
@@ -66,6 +82,32 @@ export class SpacecraftModel {
         show: false,
       }),
     );
+    const asset = MODEL_ASSETS[design.design_id];
+    if (asset) void this.loadGltf(asset.url, design.width_m / asset.nativeWidthM);
+  }
+
+  private async loadGltf(url: string, scale: number): Promise<void> {
+    try {
+      const model = await Cesium.Model.fromGltfAsync({
+        url,
+        upAxis: Cesium.Axis.Z, // the asset is already in the body frame; no glTF axis conversion
+        forwardAxis: Cesium.Axis.X,
+        show: false,
+        backFaceCulling: false,
+      });
+      if (this.destroyed) {
+        model.destroy();
+        return;
+      }
+      this.gltf = this.scene.primitives.add(model);
+      this.gltfScale = scale;
+      Cesium.Matrix4.fromUniformScale(scale, this.scaleMatrix);
+      // the detailed model replaces the part-based placeholder
+      if (this.primitive) this.scene.primitives.remove(this.primitive);
+      this.primitive = null;
+    } catch (err) {
+      console.warn(`spacecraft model ${url} failed to load; keeping the part-based model`, err);
+    }
   }
 
   /** Largest camera distance at which the envelope spans MIN_MODEL_PIXELS on screen. */
@@ -78,10 +120,10 @@ export class SpacecraftModel {
 
   /** positionFixed / velocityFixed in Cesium's Earth-fixed frame (metres, m/s). */
   update(positionFixed: Cesium.Cartesian3, velocityFixed: Cesium.Cartesian3): void {
-    const p = this.primitive;
-    if (!p) return;
     const distance = Cesium.Cartesian3.distance(this.scene.camera.positionWC, positionFixed);
-    this.shown = p.show = distance < this.visibleWithin();
+    this.shown = distance < this.visibleWithin();
+    if (this.primitive) this.primitive.show = this.shown;
+    if (this.gltf) this.gltf.show = this.shown;
     if (!this.shown) return;
     Cesium.Cartesian3.normalize(velocityFixed, this.x);
     Cesium.Cartesian3.normalize(positionFixed, this.z);
@@ -93,17 +135,27 @@ export class SpacecraftModel {
       [this.x.x, this.x.y, this.x.z, this.y.x, this.y.y, this.y.z, this.z.x, this.z.y, this.z.z],
       this.rotation,
     );
-    p.modelMatrix = Cesium.Matrix4.fromRotationTranslation(this.rotation, positionFixed, p.modelMatrix);
+    Cesium.Matrix4.fromRotationTranslation(this.rotation, positionFixed, this.matrix);
+    if (this.primitive) this.primitive.modelMatrix = Cesium.Matrix4.clone(this.matrix, this.primitive.modelMatrix);
+    if (this.gltf) {
+      this.gltf.modelMatrix = this.gltfScale === 1
+        ? Cesium.Matrix4.clone(this.matrix, this.gltf.modelMatrix)
+        : Cesium.Matrix4.multiply(this.matrix, this.scaleMatrix, this.gltf.modelMatrix);
+    }
   }
 
   hide(): void {
     this.shown = false;
     if (this.primitive) this.primitive.show = false;
+    if (this.gltf) this.gltf.show = false;
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.primitive) this.scene.primitives.remove(this.primitive);
+    if (this.gltf) this.scene.primitives.remove(this.gltf);
     this.primitive = null;
+    this.gltf = null;
     this.shown = false;
   }
 }
