@@ -3,7 +3,7 @@ import type { CatalogObject, CatalogObjectType, OrbitClass } from '../types/api'
 import { buildEarthTexture } from './earthTexture';
 import { MODEL_NORAD_ID } from './filters';
 import { readPalette, type Palette } from './palette';
-import { STRIDE, gmst } from './propagation';
+import { STRIDE, gmst, temeToFixed } from './propagation';
 
 // Catalog globe. Every object is a point primitive positioned in TEME (metres); the point, polyline,
 // marker and label collections share one model matrix, a rotation about Z by -GMST(now), so the whole
@@ -16,8 +16,8 @@ export interface ExplorerSceneCallbacks {
 
 // Solid, anti-aliased dots (pixels). Debris is the most numerous, so it is the smallest and slightly
 // translucent, which keeps dense shells from merging into a smear.
-const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 3, ROCKET_BODY: 3.5 };
-const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.85, ROCKET_BODY: 0.95 };
+const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 2.5, ROCKET_BODY: 3 };
+const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.75, ROCKET_BODY: 0.9 };
 const SELECTED_SIZE = 8;
 // The model spacecraft: a magenta dot larger than the rest, a soft steady halo so it can be found at a
 // glance, and two staggered ripples that grow and fade so one is always on screen.
@@ -32,6 +32,11 @@ const IDLE_BEFORE_ROTATE_S = 10;
 const INTRO_DELAY_S: Record<OrbitClass, number> = { LEO: 0, MEO: 0.35, HEO: 0.5, GEO: 0.7 };
 const INTRO_GEO_SWEEP_S = 0.6;
 const INTRO_FADE_S = 0.5;
+// The opening view: Earth spans this share of the frame's shorter side, so LEO (where GPM flies) reads
+// clearly and the sparser MEO and GEO objects sit around it.
+const EARTH_FILL = 0.62;
+const EARTH_RADIUS_M = Cesium.Ellipsoid.WGS84.maximumRadius;
+const MAX_OPENING_LAT_DEG = 35;
 
 function ringSprite(): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -185,13 +190,37 @@ export class ExplorerScene {
       if (this.hovered !== null) this.hoverLabel.text = this.objects[this.hovered].name;
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-    // Far enough out that the GEO belt arcs across the frame around the Earth. In portrait the
-    // field of view is vertical, so start closer to keep the globe a similar width.
-    const aspect = container.clientWidth / Math.max(container.clientHeight, 1);
-    const altitude = 42_000_000 * Math.min(1, Math.max(0.75, aspect * 1.3));
-    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(-30, 18, altitude) });
+    // Until the first state arrives (when the view turns to GPM), look at the Atlantic.
+    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(-30, 18, this.openingRangeM() - EARTH_RADIUS_M) });
 
-    void this.addEarth(container.clientWidth < 768 ? 4096 : 8192);
+    // 8192 px only where the extra detail can show: high-density screens wider than a phone.
+    const sharp = container.clientWidth >= 768 && (window.devicePixelRatio || 1) > 1;
+    void this.addEarth(sharp ? 8192 : 4096);
+  }
+
+  /**
+   * Camera distance from Earth's centre that makes Earth span EARTH_FILL of the shorter side. Cesium's
+   * fov is the horizontal angle in landscape and the vertical one in portrait, so the half-angle across
+   * the shorter side is derived from it and the aspect ratio.
+   */
+  private openingRangeM(): number {
+    const canvas = this.viewer.scene.canvas;
+    const w = Math.max(canvas.clientWidth, 1);
+    const h = Math.max(canvas.clientHeight, 1);
+    const fov = (this.viewer.camera.frustum as Cesium.PerspectiveFrustum).fov ?? Cesium.Math.toRadians(60);
+    const shortHalf = Math.atan((Math.tan(fov / 2) * Math.min(w, h)) / Math.max(w, h));
+    return EARTH_RADIUS_M / Math.sin(Math.atan(EARTH_FILL * Math.tan(shortHalf)));
+  }
+
+  /** Turn the opening view over GPM, unless the person has already moved the camera. */
+  private viewOverModel(): void {
+    const i = this.modelIndex;
+    const s = this.state;
+    if (i === null || !s || this.lastInteraction > -Infinity || !Number.isFinite(s[i * STRIDE])) return;
+    const [x, y, z] = temeToFixed(s[i * STRIDE], s[i * STRIDE + 1], s[i * STRIDE + 2], gmst(this.stateUnix));
+    const lon = Math.atan2(y, x);
+    const lat = Cesium.Math.clamp(Math.atan2(z, Math.hypot(x, y)), -Cesium.Math.toRadians(MAX_OPENING_LAT_DEG), Cesium.Math.toRadians(MAX_OPENING_LAT_DEG));
+    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromRadians(lon, lat, this.openingRangeM() - EARTH_RADIUS_M) });
   }
 
   private async addEarth(width: number): Promise<void> {
@@ -248,6 +277,7 @@ export class ExplorerScene {
     const first = this.state === null;
     this.state = buffer;
     this.stateUnix = unix;
+    if (first) this.viewOverModel();
     if (first && !this.reducedMotion) this.startIntro();
   }
 
