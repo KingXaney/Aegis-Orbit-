@@ -46,6 +46,16 @@ class ScenarioDetail(BaseModel):
     simulation: "SimulationState"
 
 
+class SpacecraftDesignModel(BaseModel):
+    design_id: str
+    label: str
+    length_m: float
+    width_m: float
+    height_m: float
+    basis: str
+    reference: str = ""
+
+
 class ObjectSummary(BaseModel):
     object_id: str
     name: str
@@ -67,6 +77,7 @@ class ObjectSummary(BaseModel):
     radius_basis: str
     covariance_source: str
     covariance_sigmas_rtn_m: Optional[List[float]] = None
+    design: SpacecraftDesignModel
     validation_status: str
     warnings: List[str] = []
 
@@ -438,6 +449,40 @@ class PerceptionResponse(BaseModel):
     limitations: List[str] = []
     disclaimer: str
     cached: bool = False
+
+
+class CatalogObject(BaseModel):
+    norad_id: int
+    name: str
+    type: str = Field(description="PAYLOAD | DEBRIS | ROCKET_BODY")
+    owner: Optional[str] = Field(default=None, description="SATCAT owner/operator code")
+    launch_date: Optional[str] = None
+    intl_designator: Optional[str] = None
+    orbit_class: str = Field(description="LEO | MEO | GEO | HEO")
+    inclination_deg: float
+    period_min: float
+    perigee_km: float
+    apogee_km: float
+    epoch: str
+    tle1: str
+    tle2: str
+
+
+class CatalogResponse(BaseModel):
+    source: str
+    origin: str = Field(description="cache | fixture")
+    retrieved_at: Optional[str] = None
+    note: str
+    total: int
+    rejected: int
+    counts_by_type: Dict[str, int]
+    objects: List[CatalogObject]
+
+
+class CatalogRefreshResponse(BaseModel):
+    status: str
+    retrieved_at: Optional[str] = None
+    detail: str
 
 
 ScenarioDetail.model_rebuild()

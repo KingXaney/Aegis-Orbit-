@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from .. import __version__
 from ..agent.orchestrator import run_analysis
 from ..config import get_settings
-from ..data import celestrak
+from ..data import celestrak, explorer_catalog
 from ..scenarios.registry import list_scenarios
-from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproveRequest, DataRefreshResponse,
+from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproveRequest, CatalogRefreshResponse,
+                              CatalogResponse, DataRefreshResponse,
                               DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PerceptionModelInfo,
                               PerceptionResponse, PlanRequest, PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
                               ScreenResponse, SecondaryCheckRequest, SecondaryCheckResponse, SimulationState,
@@ -189,3 +190,23 @@ def refresh_data():
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return DataRefreshResponse(status="ok", detail=f"refreshed {len(metas)} CelesTrak groups and rebuilt '{real.SCENARIO_ID}'",
                                groups=metas)
+
+
+@router.get("/catalog", response_model=CatalogResponse)
+def catalog():
+    """Every tracked object on orbit with its TLE and SATCAT metadata, for the explorer page."""
+    try:
+        body = explorer_catalog.get_catalog_json()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # Serialised once per process; 25k+ rows are too many to re-validate on every request.
+    return Response(content=body, media_type="application/json")
+
+
+@router.post("/catalog/refresh", response_model=CatalogRefreshResponse)
+def refresh_catalog():
+    """Rebuild the explorer catalog from CelesTrak (at most once every two hours)."""
+    try:
+        return explorer_catalog.refresh_catalog()
+    except celestrak.DataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

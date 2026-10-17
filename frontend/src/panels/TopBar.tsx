@@ -25,6 +25,9 @@ export default function TopBar() {
           <span className="hidden text-[10px] uppercase tracking-wider text-dim sm:inline">collision avoidance simulator</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <a href="/" className="rounded px-1.5 py-1 text-[11px] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-primary">
+            Home
+          </a>
           <label className="sr-only" htmlFor="scenario-select">Scenario</label>
           <select
             id="scenario-select"

@@ -63,8 +63,10 @@ npm install
 npm run dev          # copies Cesium's static assets to public/cesium and starts Vite on :5173
 ```
 
-Open <http://localhost:5173>. The backend URL defaults to `http://localhost:8000`
-(override with `VITE_API_BASE_URL` in `frontend/.env.local`).
+Open <http://localhost:5173> for the catalog explorer: every tracked object on orbit, propagated live
+with SGP4 in a browser worker, with type, orbit class and operator filters and a details card on click.
+The collision avoidance simulator is at <http://localhost:5173/mission>. The backend URL defaults to
+`http://localhost:8000` (override with `VITE_API_BASE_URL` in `frontend/.env.local`).
 
 ### 3. Environment variables
 
@@ -107,8 +109,8 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
-1. Start both servers and open the app. The synthetic scenario loads in the **encounter map**: the spacecraft sits at the bottom of a dark "road" whose lanes are km of miss offset and whose length is time to each object's closest approach; the glowing ribbon is its planned path. The CesiumJS globe is the minimap at the bottom left (⤢ swaps the two). Press **Play** (or space).
-2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 7.7 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. The perception layer scores the catalog and the critical debris appears far up the road as a red-outlined box with its relative-motion trail; its six later, farther passes show up as blue boxes only when they enter the 30-minute near field. Scrub to T−10 min and T−60 s to watch it slide onto the ribbon.
+1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads in the **encounter map**: the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. The spacecraft sits at the bottom of a dark "road" whose lanes are km of miss offset and whose length is time to each object's closest approach; the glowing ribbon is its planned path. The CesiumJS globe is the minimap at the bottom left (⤢ swaps the two). Press **Play** (or space). With the globe as the main stage the camera follows the spacecraft (dashed cyan is its predicted path); press **Close-up** to frame its true-scale 3D model. Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.
+2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 8.2 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. The perception layer scores the catalog and the critical debris appears far up the road as a red-outlined box with its relative-motion trail; its later, farther passes show up as blue boxes only when they enter the 30-minute near field. Scrub to T−10 min and T−60 s to watch it slide onto the ribbon. On the globe, the red marker, danger region and miss vector appear at the predicted TCA; the timeline shows a TCA tick and a countdown.
 3. Click **Analyze with agent**. The agent calls `list_conjunctions → get_conjunction_details → plan_maneuvers → check_secondary ×3 → generate_report`; the tool execution history, validation checks and narrative appear in the panel. Three candidate burns are drawn in green; the recommended one is highlighted.
 4. Compare candidates in the table and chart (Δv, post-burn miss distance, post-burn Pc, target met, secondary screening status). Click a row or a green path to select it; **Jump to burn** moves the clock to the burn.
 5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision, and the state becomes **MITIGATED**. The maneuvered trajectory becomes solid green while the original stays dashed cyan for comparison. **Reject** restores the original. **Reset** returns the scenario to the identical initial state.
@@ -173,6 +175,8 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `GET /api/simulation/state` | Threat state, approvals, decisions |
 | `POST /api/simulation/approve`, `POST /api/simulation/reject` | Human decision on a simulated maneuver |
 | `POST /api/data/refresh` | Download fresh CelesTrak groups (network required) |
+| `GET /api/catalog` | Explorer catalog: every on-orbit object's TLE with SATCAT type, owner and launch date, plus orbit class |
+| `POST /api/catalog/refresh` | Rebuild the explorer catalog from CelesTrak (`GROUP=active`, `NAME=DEB`, `NAME=R/B`, SATCAT); at most once every 2 hours |
 
 ## Repository layout
 

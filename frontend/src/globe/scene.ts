@@ -15,7 +15,7 @@ export interface LayerFlags {
   labels: boolean;
 }
 
-export type CameraMode = 'follow' | 'free';
+export type CameraMode = 'follow' | 'closeup' | 'free';
 
 export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
@@ -31,6 +31,12 @@ const COLORS = {
   burn: Cesium.Color.fromCssColorString('#a3e635'),
   label: Cesium.Color.fromCssColorString('#d7e1f2'),
 };
+
+// Normal follow-camera floor; close-up lets the camera reach a true-scale spacecraft model.
+const MIN_ZOOM_M = 2000;
+const CLOSEUP_MIN_ZOOM_M = 2;
+// Follow-camera offset (metres, entity-local frame): far enough to read the orbit's curvature and the Earth limb.
+const FOLLOW_VIEW_FROM = new Cesium.Cartesian3(-420_000, 180_000, 160_000);
 
 const SATELLITE_SVG = encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
@@ -74,8 +80,10 @@ export class GlobeScene {
   private postRenderRemover: Cesium.Event.RemoveCallback;
   private destroyed = false;
   private lastFixedPrimary = new Cesium.Cartesian3();
-  private spacecraft: SpacecraftModel;
-  private primaryTrajectory: SampledTrajectory | null = null;
+  /** True-scale models for the primary, highlighted objects and the current threat object. */
+  private models = new Map<string, { model: SpacecraftModel; traj: SampledTrajectory }>();
+  private conjunctionModelId: string | null = null;
+  private scratchPos = new Cesium.Cartesian3();
   private scratchVel = new Cesium.Cartesian3();
 
   constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string) {
@@ -110,13 +118,12 @@ export class GlobeScene {
     scene.globe.baseColor = Cesium.Color.fromCssColorString('#06101f');
     scene.backgroundColor = Cesium.Color.fromCssColorString('#02040a');
     scene.highDynamicRange = false;
-    scene.screenSpaceCameraController.minimumZoomDistance = 2000;
+    scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_M;
     scene.screenSpaceCameraController.maximumZoomDistance = 80_000_000;
     scene.fog.enabled = false;
     this.viewer.clock.shouldAnimate = false;
     this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
 
-    this.spacecraft = new SpacecraftModel(scene);
     // Cesium evaluates entity positions during clock.tick(), before preUpdate. The simulation
     // controller therefore sets the clock for the *next* frame in postRender, and everything
     // rendered in a frame (entities, polylines, the spacecraft primitives, the tracked camera)
@@ -124,13 +131,15 @@ export class GlobeScene {
     this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
     this.preUpdateRemover = scene.preUpdate.addEventListener(() => {
       const time = this.viewer.clock.currentTime;
-      const st = this.primaryTrajectory?.stateAt(this.bridge.toUnix(time));
-      if (st) {
-        const pos = temeToFixed(time, st.p, this.lastFixedPrimary);
-        const vel = temeVelocityToFixed(time, st.v, pos, this.scratchVel);
-        this.spacecraft.update(pos, vel);
-      } else {
-        this.spacecraft.hide();
+      const unix = this.bridge.toUnix(time);
+      for (const { model, traj } of this.models.values()) {
+        const st = traj.stateAt(unix);
+        if (st) {
+          const pos = temeToFixed(time, st.p, this.scratchPos);
+          model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel));
+        } else {
+          model.hide();
+        }
       }
     });
     this.postRenderRemover = scene.postRender.addEventListener(() => {
@@ -242,7 +251,7 @@ export class GlobeScene {
           outlineColor: Cesium.Color.fromCssColorString('#05080f'),
           outlineWidth: 1.5,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          show: new Cesium.CallbackProperty(() => isPrimary || isHighlight || this.layers.background, false),
+          show: new Cesium.CallbackProperty(() => (isPrimary || isHighlight || this.layers.background) && !this.modelShown(t.object_id), false),
         },
         label: this.labelGraphics(obj.name, color, isPrimary ? -22 : -12),
       });
@@ -253,12 +262,11 @@ export class GlobeScene {
       }
       this.objectEntities.set(t.object_id, entity);
 
+      if (isPrimary || isHighlight) this.addModel(obj, traj);
       if (isPrimary) {
-        this.primaryTrajectory = traj;
-        // Tracking offset (metres, entity-local frame): far enough to read the orbit's curvature and the Earth limb.
-        entity.viewFrom = new Cesium.Cartesian3(-420_000, 180_000, 160_000);
+        entity.viewFrom = this.viewFromFor(this.cameraMode);
         this.primaryEntity = entity;
-        this.addPrimaryModel(pos);
+        this.addPrimaryIcon(pos);
         this.addPrimaryPath(traj);
       } else {
         this.addObjectPath(t.object_id, traj, color, isHighlight);
@@ -267,8 +275,29 @@ export class GlobeScene {
     this.applyCameraMode();
   }
 
-  private addPrimaryModel(pos: Cesium.PositionProperty): void {
-    // Far away: a billboard icon. Close: the procedural spacecraft primitives (see SpacecraftModel).
+  private addModel(obj: ObjectSummary, traj: SampledTrajectory): void {
+    if (this.models.has(obj.object_id) || !obj.design) return;
+    this.models.set(obj.object_id, { model: new SpacecraftModel(this.viewer.scene, obj.design), traj });
+  }
+
+  private removeModel(objectId: string): void {
+    this.models.get(objectId)?.model.destroy();
+    this.models.delete(objectId);
+  }
+
+  private modelShown(objectId: string): boolean {
+    return this.models.get(objectId)?.model.shown ?? false;
+  }
+
+  /** Tracking offset for the primary: orbit context in follow mode, a few envelope radii in close-up. */
+  private viewFromFor(mode: CameraMode): Cesium.Cartesian3 {
+    const r = this.primaryId ? this.models.get(this.primaryId)?.model.envelopeRadiusM : undefined;
+    if (mode !== 'closeup' || !r) return FOLLOW_VIEW_FROM;
+    return new Cesium.Cartesian3(-2.6 * r, 1.6 * r, 1.1 * r);
+  }
+
+  private addPrimaryIcon(pos: Cesium.PositionProperty): void {
+    // Far away: a billboard icon. Once it is big enough on screen: the true-scale model (see SpacecraftModel).
     const icon = this.viewer.entities.add({
       id: 'primary-icon',
       position: pos,
@@ -277,7 +306,7 @@ export class GlobeScene {
         width: 28,
         height: 28,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(1.5e6, Number.POSITIVE_INFINITY),
+        show: new Cesium.CallbackProperty(() => !(this.primaryId && this.modelShown(this.primaryId)), false),
       },
     });
     this.objectPaths.set('primary-icon', icon);
@@ -338,7 +367,15 @@ export class GlobeScene {
     for (const e of this.conjunctionEntities) this.viewer.entities.remove(e);
     this.conjunctionEntities = [];
     this.conjunction = conj;
+    if (this.conjunctionModelId) this.removeModel(this.conjunctionModelId);
+    this.conjunctionModelId = null;
     if (!conj) return;
+    const secondary = this.objects.get(conj.secondary_id);
+    const secondaryTraj = this.trajectories.get(conj.secondary_id);
+    if (secondary && secondaryTraj && !this.models.has(conj.secondary_id)) {
+      this.addModel(secondary, secondaryTraj);
+      this.conjunctionModelId = conj.secondary_id;
+    }
     const rp = conj.primary_state_teme.r_km as [number, number, number];
     const rs = conj.secondary_state_teme.r_km as [number, number, number];
     const mid: [number, number, number] = [(rp[0] + rs[0]) / 2, (rp[1] + rs[1]) / 2, (rp[2] + rs[2]) / 2];
@@ -492,7 +529,12 @@ export class GlobeScene {
 
   private applyCameraMode(): void {
     if (this.destroyed) return;
-    if (this.cameraMode === 'follow' && this.primaryEntity) {
+    const tracking = this.cameraMode !== 'free' && this.primaryEntity;
+    this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = this.cameraMode === 'closeup' ? CLOSEUP_MIN_ZOOM_M : MIN_ZOOM_M;
+    if (tracking && this.primaryEntity) {
+      // re-track so Cesium applies the mode's viewFrom offset
+      this.primaryEntity.viewFrom = this.viewFromFor(this.cameraMode);
+      this.viewer.trackedEntity = undefined;
       this.viewer.trackedEntity = this.primaryEntity;
     } else {
       this.viewer.trackedEntity = undefined;
@@ -514,17 +556,13 @@ export class GlobeScene {
       });
     } else {
       this.applyCameraMode();
-      if (this.primaryEntity) {
-        this.viewer.trackedEntity = this.primaryEntity;
-      }
     }
   }
 
   flyToPrimary(): void {
     if (this.primaryEntity) {
-      this.cameraMode = 'follow';
-      this.viewer.trackedEntity = undefined;
-      this.viewer.trackedEntity = this.primaryEntity;
+      if (this.cameraMode === 'free') this.cameraMode = 'follow';
+      this.applyCameraMode();
     }
   }
 
@@ -540,15 +578,15 @@ export class GlobeScene {
     this.objects.clear();
     this.primaryEntity = null;
     this.primaryId = null;
-    this.primaryTrajectory = null;
-    this.spacecraft.hide();
+    for (const id of [...this.models.keys()]) this.removeModel(id);
+    this.conjunctionModelId = null;
   }
 
   destroy(): void {
     this.destroyed = true;
     this.preUpdateRemover();
     this.postRenderRemover();
-    this.spacecraft.destroy();
+    for (const id of [...this.models.keys()]) this.removeModel(id);
     this.handler.destroy();
     this.viewer.destroy();
   }

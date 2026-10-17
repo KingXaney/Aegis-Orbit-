@@ -17,8 +17,11 @@ export default function LayerControls() {
         <Button size="sm" variant={cameraMode === 'follow' ? 'primary' : 'secondary'} onClick={() => setCameraMode('follow')}>
           Follow
         </Button>
+        <Button size="sm" variant={cameraMode === 'closeup' ? 'primary' : 'secondary'} onClick={() => setCameraMode('closeup')} title="Frame the primary's true-scale model">
+          Close-up
+        </Button>
         <Button size="sm" variant={cameraMode === 'free' ? 'primary' : 'secondary'} onClick={() => setCameraMode('free')}>
-          Free orbit
+          Free
         </Button>
         <Button size="sm" variant="ghost" onClick={resetCamera} title="Reset camera">
           Reset
@@ -35,7 +38,7 @@ export default function LayerControls() {
         <Toggle label="Labels" checked={layers.labels} onChange={() => toggleLayer('labels')} />
       </div>
       <p className="mt-3 text-[10px] leading-snug text-dim">
-        Markers, the spacecraft model and the danger region are enlarged for visibility. Dashed lines are predicted motion; solid trails are past motion.
+        Spacecraft models are true scale (zoom in or use Close-up to see them); markers and the danger region are enlarged for visibility. Dashed lines are predicted motion; solid trails are past motion.
         {scenario?.kind === 'real' ? ' Positions are SGP4 estimates from public elements, not sensor telemetry.' : ' States are synthetic.'}
       </p>
     </details>

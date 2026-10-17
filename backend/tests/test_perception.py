@@ -37,7 +37,9 @@ def test_physics_only_tiers_on_synthetic(session, null_model):
     semi = [o for o in res["objects"] if o["tier"] == "SEMI_CRITICAL"]
     assert len(crit) == 1 and crit[0]["object_id"] == synthetic.SECONDARY_ID
     assert abs(crit[0]["physics"]["miss_distance_km"] - 0.3535) < 2e-3 and crit[0]["physics"]["verified"]
-    assert all(o["object_id"] == synthetic.SECONDARY_ID for o in semi) and len(semi) == 6  # the repeated passes
+    # the semi-critical entries are the same debris object on its later, farther passes (one per encounter)
+    assert semi and all(o["object_id"] == synthetic.SECONDARY_ID for o in semi)
+    assert len(semi) == res["counts"]["encounters"] - 1
     assert res["counts"]["ML_WATCH"] == 0 and res["counts"]["HIDDEN"] == 5 and res["model"]["status"] == "UNAVAILABLE"
     assert res["screening_mode"] == "FULL_PHYSICS" and res["complete"] and res["primary_variant"]["kind"] == "ORIGINAL"
     assert res["horizon"]["horizon_s"] >= 2 * (session.scenario.catalog.require(synthetic.PRIMARY_ID).period_s or 0)
