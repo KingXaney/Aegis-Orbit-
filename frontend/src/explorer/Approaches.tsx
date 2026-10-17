@@ -196,7 +196,8 @@ export default function Approaches() {
   const rows = showAll ? upcoming : upcoming.slice(0, ROWS);
   const noneFound = state.data !== null && state.data.approaches.length === 0;
   const exhausted = state.status === 'ready' && upcoming.length === 0 && !noneFound;
-  const pinnedGone = pinnedKey !== null && state.data !== null && !upcoming.some((a) => approachKey(a) === pinnedKey);
+  const pinnedPass = pinnedKey === null ? null : (upcoming.find((a) => approachKey(a) === pinnedKey) ?? null);
+  const pinnedGone = pinnedKey !== null && state.data !== null && pinnedPass === null;
 
   // A pinned pass that has gone by unpins itself; Escape puts one away.
   useEffect(() => {
@@ -271,6 +272,16 @@ export default function Approaches() {
                     {showAll ? `Show the next ${ROWS}` : `Show all ${upcoming.length} passes`}
                   </button>
                 )}
+                {pinnedPass ? (
+                  <p className="mt-3 flex min-h-10 items-center gap-3 text-x-14" role="status">
+                    <span className="min-w-0 flex-1">
+                      Showing <span className="font-bold">{pinnedPass.name}</span> on the globe.
+                    </span>
+                    <button type="button" onClick={() => togglePinned(approachKey(pinnedPass))} className="x-button shrink-0">
+                      Clear
+                    </button>
+                  </p>
+                ) : null}
                 <p className="mt-3 text-x-12 text-x-muted">Select a pass to see where the two orbits cross. {state.data.note}</p>
               </>
             ) : (
