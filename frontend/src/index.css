@@ -103,6 +103,14 @@ input[type='range'].scrubber:focus-visible {
    simulator flies, and for the primary action. Dark only for now: a light set would redefine these
    variables under [data-theme='light']. The globe reads the same variables (see explorer/palette.ts). */
 
+html.x-root,
+html.x-root body,
+html.x-root #root {
+  font-size: 16px;
+  background: var(--x-bg);
+  -webkit-tap-highlight-color: transparent;
+}
+
 :root {
   --x-bg: #0b0d10;
   --x-surface: #14171c;
@@ -171,6 +179,18 @@ input[type='range'].scrubber:focus-visible {
   }
   .explorer p {
     text-wrap: pretty;
+  }
+  .explorer ::selection {
+    background: var(--x-accent);
+    color: var(--x-bg);
+  }
+  .explorer button,
+  .explorer a {
+    touch-action: manipulation;
+  }
+  .x-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--x-control) transparent;
   }
   .x-mono {
     font-family: var(--font-x-mono);
@@ -266,7 +286,7 @@ input[type='range'].scrubber:focus-visible {
   .x-link::after {
     content: '';
     position: absolute;
-    inset: -10px -4px;
+    inset: -12px -4px;
   }
   .x-row {
     /* Contains its visually hidden input, so focusing it never scrolls the page. */

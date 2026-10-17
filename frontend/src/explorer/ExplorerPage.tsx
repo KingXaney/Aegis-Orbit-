@@ -26,7 +26,7 @@ const TYPE_PLURAL = { PAYLOAD: 'Active satellites', DEBRIS: 'Debris', ROCKET_BOD
 function SiteHeader() {
   return (
     <div className="flex min-h-10 items-center justify-between gap-4">
-      <a href="/" aria-current="page" className="x-display x-focus rounded-[4px] text-x-21">
+      <a href="/" aria-current="page" className="x-display x-focus inline-flex min-h-10 items-center rounded-[4px] text-x-21">
         Aegis Orbit
       </a>
       <nav aria-label="Pages">
@@ -103,7 +103,7 @@ function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButt
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
   const resetFilters = useExplorerStore((s) => s.resetFilters);
   return (
-    <section aria-labelledby="catalog-heading" className="border-t border-x-divider pt-6">
+    <section aria-labelledby="catalog-heading" className="border-t border-x-divider pt-6 md:border-t-0 md:pt-0 lg:border-t lg:pt-6">
       <div className="flex items-center justify-between gap-4">
         <h2 id="catalog-heading" className="x-display text-x-21">
           On the globe
@@ -181,7 +181,7 @@ function DataCredit() {
   const meta = useExplorerStore((s) => s.meta);
   const retrieved = meta?.retrieved_at ? retrievedFormat.format(new Date(meta.retrieved_at)) : null;
   return (
-    <p className="text-x-12 text-x-muted">
+    <p className="text-x-12 text-x-muted md:col-span-2">
       Orbital elements from{' '}
       <a href="https://celestrak.org" className="x-link" rel="noopener">
         CelesTrak
@@ -246,9 +246,9 @@ export default function ExplorerPage() {
         {status === 'ready' && <DetailsCard />}
       </section>
 
-      <div inert={panelOpen} className="flex flex-col gap-8 px-4 py-8 [grid-area:body] md:px-6 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
+      <div inert={panelOpen} className="x-scroll flex flex-col gap-8 px-4 py-8 [grid-area:body] md:grid md:grid-cols-2 md:items-start md:gap-x-8 md:px-6 lg:flex lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
         {status === 'error' && (
-          <div className="x-panel p-4" role="alert">
+          <div className="x-panel p-4 md:col-span-2" role="alert">
             <h2 className="text-x-16 font-bold">Can’t load the catalog from {API_BASE}</h2>
             <p className="mt-2 text-x-14 text-x-muted">{error}</p>
             <p className="mt-2 text-x-14 text-x-muted">
