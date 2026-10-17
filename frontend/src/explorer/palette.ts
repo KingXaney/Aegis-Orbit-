@@ -12,11 +12,15 @@ export const TYPE_INK: Record<CatalogObjectType, string> = {
 /** Magenta, the active-route colour: GPM, its orbit and the primary action. */
 export const ACCENT_INK = 'var(--x-accent)';
 
+/** Red, the warning colour: critical passes only. */
+export const WARNING_INK = 'var(--x-warning)';
+
 export interface Palette {
   bg: string;
   surface: string;
   text: string;
   accent: string;
+  warning: string;
   ocean: string;
   land: string;
   coast: string;
@@ -29,6 +33,7 @@ const FALLBACK: Palette = {
   surface: '#14171c',
   text: '#e8eaed',
   accent: '#ff5fd2',
+  warning: '#ff4d4d',
   ocean: '#0f1319',
   land: '#333f52',
   coast: '#56647a',
@@ -43,6 +48,7 @@ export function readPalette(root: Element = document.documentElement): Palette {
     surface: v('--x-surface', FALLBACK.surface),
     text: v('--x-text', FALLBACK.text),
     accent: v('--x-accent', FALLBACK.accent),
+    warning: v('--x-warning', FALLBACK.warning),
     ocean: v('--x-ocean', FALLBACK.ocean),
     land: v('--x-land', FALLBACK.land),
     coast: v('--x-coast', FALLBACK.coast),

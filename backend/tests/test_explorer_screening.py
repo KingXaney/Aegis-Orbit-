@@ -38,6 +38,10 @@ def test_compute_finds_the_close_pass(two_object_catalog):
     assert abs(a["tca_unix"] - TCA) < 2
     assert 1.5 < a["miss_distance_km"] < 2.2 and 12 < a["relative_speed_kms"] < 13.5
     assert len(a["primary_position_teme_km"]) == 3
+    # 1.85 km is inside both the 10 km unverified limit and the 5 km distance target.
+    assert a["threat_state"] == "UNVERIFIED" and a["critical"] is True
+    assert out["critical_distance_km"] == 5.0
+    assert all(p["critical"] == (p["miss_distance_km"] < 5.0) for p in out["approaches"])
 
 
 def test_endpoint_answers_202_until_ready_then_serves_upcoming_only(two_object_catalog, client, monkeypatch):

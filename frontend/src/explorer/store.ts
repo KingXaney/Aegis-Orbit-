@@ -58,6 +58,8 @@ export interface ExplorerState {
   visible: number;
   visibleByType: Record<CatalogObjectType, number>;
   showPaths: boolean;
+  /** Step everything back except GPM and the objects its screening detected. */
+  highlightDetections: boolean;
   panelOpen: boolean;
   selected: number | null;
   live: LiveState | null;
@@ -84,6 +86,7 @@ export interface ExplorerState {
   clearOwners: () => void;
   resetFilters: () => void;
   setShowPaths: (on: boolean) => void;
+  setHighlightDetections: (on: boolean) => void;
   setPanelOpen: (open: boolean) => void;
   select: (index: number | null) => void;
   focus: (index: number) => void;
@@ -122,6 +125,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     visible: 0,
     visibleByType: { PAYLOAD: 0, DEBRIS: 0, ROCKET_BODY: 0 },
     showPaths: false,
+    highlightDetections: true,
     panelOpen: false,
     selected: null,
     live: null,
@@ -189,6 +193,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     clearOwners: () => refilter({ ...get().filters, owners: [] }),
     resetFilters: () => refilter(DEFAULT_FILTERS),
     setShowPaths: (showPaths) => set({ showPaths }),
+    setHighlightDetections: (highlightDetections) => set({ highlightDetections }),
     setPanelOpen: (panelOpen) => set({ panelOpen }),
     select: (selected) => {
       set({ selected, live: null });

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ApproachRecord } from '../types/api';
+import { CriticalMark } from './icons';
 import { TYPE_INK } from './palette';
 import { revealGlobe } from './reveal';
 import { approachKey, useExplorerStore } from './store';
@@ -74,12 +75,20 @@ function ClosestPass({ a, now }: { a: ApproachRecord; now: number }) {
     <button
       type="button"
       {...props}
-      aria-label={`Closest pass: ${a.name}, ${km(a.miss_distance_km)}, in ${spokenCountdown(inS)}`}
+      aria-label={`Closest pass${a.critical ? ', critical' : ''}: ${a.name}, ${km(a.miss_distance_km)}, in ${spokenCountdown(inS)}`}
       className={`x-focus x-press block min-h-[124px] w-full rounded-[12px] border p-4 text-left transition-[background-color,border-color,transform] duration-150 ease-[var(--x-ease)] hover:bg-x-raised ${
-        pinned ? 'border-x-accent bg-x-raised' : 'border-x-divider'
+        pinned ? 'border-x-accent bg-x-raised' : a.critical ? 'border-x-warning' : 'border-x-divider'
       }`}
     >
-      <span className="block text-x-12 text-x-muted">Closest pass</span>
+      <span className="flex items-center gap-2 text-x-12 text-x-muted">
+        Closest pass
+        {a.critical && (
+          <span className="flex items-center gap-1 font-bold text-x-warning">
+            <CriticalMark />
+            Critical
+          </span>
+        )}
+      </span>
       <span className="x-mono mt-1 block text-x-36">{km(a.miss_distance_km)}</span>
       <span className="mt-1 flex items-center gap-2 text-x-14">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[a.type] }} aria-hidden="true" />
@@ -100,17 +109,23 @@ function PassRow({ a, now, closest }: { a: ApproachRecord; now: number; closest:
       <button
         type="button"
         {...props}
-        aria-label={`${a.name}, ${km(a.miss_distance_km)}, in ${spokenCountdown(inS)}, at ${tcaFormat.format(a.tca_unix * 1000)} UTC`}
+        aria-label={`${a.critical ? 'Critical: ' : ''}${a.name}, ${km(a.miss_distance_km)}, in ${spokenCountdown(inS)}, at ${tcaFormat.format(a.tca_unix * 1000)} UTC`}
         className={`x-focus grid min-h-10 w-full grid-cols-[6.5rem_1fr_auto] items-center gap-3 rounded-[8px] px-2 text-left text-x-14 transition-[background-color] duration-150 ease-[var(--x-ease)] hover:bg-x-raised ${
           pinned ? 'bg-x-raised shadow-[inset_2px_0_0_var(--x-accent)]' : ''
         }`}
       >
         <span className="x-mono text-x-muted">{countdown(inS)}</span>
         <span className="flex min-w-0 items-center gap-2">
-          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[a.type] }} aria-hidden="true" />
+          {a.critical ? (
+            <span className="-mx-0.5 shrink-0">
+              <CriticalMark />
+            </span>
+          ) : (
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[a.type] }} aria-hidden="true" />
+          )}
           <span className="truncate">{a.name}</span>
         </span>
-        <span className={`x-mono text-right ${closest ? 'font-bold' : ''}`}>{km(a.miss_distance_km)}</span>
+        <span className={`x-mono text-right ${a.critical ? 'font-bold text-x-warning' : closest ? 'font-bold' : ''}`}>{km(a.miss_distance_km)}</span>
       </button>
     </li>
   );
@@ -193,7 +208,10 @@ export default function Approaches() {
 
   const upcoming = state.data?.approaches.filter((a) => a.tca_unix > now) ?? [];
   const closest = upcoming.reduce<ApproachRecord | null>((best, a) => (!best || a.miss_distance_km < best.miss_distance_km ? a : best), null);
-  const rows = showAll ? upcoming : upcoming.slice(0, ROWS);
+  const criticalCount = upcoming.filter((a) => a.critical).length;
+  // The short list always holds every critical pass, then the soonest of the rest, in time order.
+  const shortList = new Set([...upcoming.filter((a) => a.critical), ...upcoming.filter((a) => !a.critical).slice(0, Math.max(0, ROWS - criticalCount))]);
+  const rows = showAll ? upcoming : upcoming.filter((a) => shortList.has(a));
   const noneFound = state.data !== null && state.data.approaches.length === 0;
   const exhausted = state.status === 'ready' && upcoming.length === 0 && !noneFound;
   const pinnedPass = pinnedKey === null ? null : (upcoming.find((a) => approachKey(a) === pinnedKey) ?? null);
@@ -254,7 +272,14 @@ export default function Approaches() {
               <>
                 <p className="mb-3 text-x-14 text-x-muted">
                   {upcoming.length} pass{upcoming.length === 1 ? '' : 'es'} within {state.data.screening_radius_km} km, found by screening GPM against{' '}
-                  {nf.format(state.data.screened)} objects with the simulator’s pipeline.
+                  {nf.format(state.data.screened)} objects with the simulator’s pipeline.{' '}
+                  {criticalCount > 0 ? (
+                    <span className="text-x-text">
+                      <span className="font-bold text-x-warning">{criticalCount} critical</span>: closer than {state.data.critical_distance_km} km, where the simulator would plan a burn.
+                    </span>
+                  ) : (
+                    `None closer than ${state.data.critical_distance_km} km, where the simulator would plan a burn.`
+                  )}
                 </p>
                 <ClosestPass a={closest} now={now} />
                 <div className="mt-4 grid grid-cols-[6.5rem_1fr_auto] gap-3 px-2 text-x-12 text-x-muted" aria-hidden="true">
@@ -269,7 +294,7 @@ export default function Approaches() {
                 </ol>
                 {upcoming.length > ROWS && (
                   <button type="button" onClick={() => setShowAll(!showAll)} className="x-link mt-2 text-x-14">
-                    {showAll ? `Show the next ${ROWS}` : `Show all ${upcoming.length} passes`}
+                    {showAll ? 'Show fewer' : `Show all ${upcoming.length} passes`}
                   </button>
                 )}
                 {pinnedPass ? (

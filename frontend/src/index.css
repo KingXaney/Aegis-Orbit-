@@ -121,6 +121,7 @@ html.x-root #root {
   --x-muted: #9aa3af;
   --x-accent: #ff5fd2;
   --x-accent-hover: #ff85de;
+  --x-warning: #ff4d4d; /* critical passes: red is the cockpit warning colour, amber (debris) the caution one */
   --x-payload: #4fd8eb;
   --x-debris: #ffb020;
   --x-rocket: #d9dde3;
@@ -139,6 +140,7 @@ html.x-root #root {
   --color-x-text: var(--x-text);
   --color-x-muted: var(--x-muted);
   --color-x-accent: var(--x-accent);
+  --color-x-warning: var(--x-warning);
   --color-x-payload: var(--x-payload);
   --color-x-debris: var(--x-debris);
   --color-x-rocket: var(--x-rocket);

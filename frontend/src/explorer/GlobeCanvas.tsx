@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { ExplorerScene, type SceneApproach } from './ExplorerScene';
+import { ExplorerScene, type SceneApproach, type SceneDetections } from './ExplorerScene';
 import { MAX_PATHS } from './filters';
 import { STRIDE, altitudeKm, speedKms, subpoint } from './propagation';
 import type { OrbitItem, WorkerIn, WorkerOut } from './propagator.worker';
@@ -33,6 +33,8 @@ export default function GlobeCanvas() {
   const modelIndex = useExplorerStore((s) => s.modelIndex);
   const active = useExplorerStore(selectActiveApproach);
   const pinned = useExplorerStore((s) => s.pinnedApproach);
+  const approachesData = useExplorerStore((s) => s.approaches.data);
+  const highlightDetections = useExplorerStore((s) => s.highlightDetections);
   const indexByNorad = useMemo(() => new Map(objects.map((o, i) => [o.norad_id, i])), [objects]);
 
   useEffect(() => {
@@ -153,6 +155,31 @@ export default function GlobeCanvas() {
     const msg: WorkerIn = { type: 'route', requestId: ++routeRequest.current, items };
     worker.postMessage(msg);
   }, [objects, modelIndex, active, pinned, indexByNorad]);
+
+  // What GPM's screening detected: one ring per object (critical if any of its passes is) and a point
+  // on GPM's orbit for every pass still ahead.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || objects.length === 0) return;
+    const now = Date.now() / 1000;
+    const passes = highlightDetections && approachesData ? approachesData.approaches.filter((a) => a.tca_unix > now) : [];
+    const byObject = new Map<number, { critical: boolean; closestKm: number; name: string }>();
+    for (const a of passes) {
+      const index = indexByNorad.get(a.norad_id);
+      if (index === undefined) continue;
+      const prev = byObject.get(index);
+      byObject.set(index, {
+        critical: (prev?.critical ?? false) || a.critical,
+        closestKm: Math.min(prev?.closestKm ?? Infinity, a.miss_distance_km),
+        name: a.name,
+      });
+    }
+    const detections: SceneDetections = {
+      objects: [...byObject].map(([index, o]) => ({ index, critical: o.critical, label: `${o.name}, ${o.closestKm.toFixed(2)} km` })),
+      encounters: passes.map((a) => ({ tcaTemeKm: a.primary_position_teme_km, critical: a.critical })),
+    };
+    scene.setDetections(detections, byObject.size > 0);
+  }, [objects, approachesData, highlightDetections, indexByNorad]);
 
   // The enclosing section names the globe; the canvas itself is driven by mouse and by the rail.
   return <div ref={containerRef} className="absolute inset-0" />;

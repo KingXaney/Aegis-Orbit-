@@ -447,6 +447,10 @@ export interface ApproachRecord {
   tca_unix: number;
   miss_distance_km: number;
   relative_speed_kms: number;
+  /** The simulator's threat state without covariance: UNVERIFIED (inside 10 km) or MONITORING. */
+  threat_state: string;
+  /** Misses the distance-based mitigation target, so the simulator would plan a burn for it. */
+  critical: boolean;
   /** GPM's TEME position at TCA (km). */
   primary_position_teme_km: [number, number, number];
   secondary_position_teme_km: [number, number, number];
@@ -462,6 +466,8 @@ export interface ApproachesResponse {
   catalog_retrieved_at: string | null;
   screened: number;
   screening_radius_km: number;
+  /** Passes closer than this are critical (the simulator's distance target). */
+  critical_distance_km: number;
   /** Approaches still ahead, soonest first. */
   approaches: ApproachRecord[];
   note: string;

@@ -400,6 +400,8 @@ class ApproachRecord(BaseModel):
     tca_unix: float
     miss_distance_km: float
     relative_speed_kms: float
+    threat_state: str = Field(description="Simulator threat state without covariance: UNVERIFIED or MONITORING")
+    critical: bool = Field(description="Misses the distance-based mitigation target, so the simulator would plan a burn")
     primary_position_teme_km: List[float] = Field(description="GPM's TEME position at TCA")
     secondary_position_teme_km: List[float]
 
@@ -414,6 +416,7 @@ class ApproachesResponse(BaseModel):
     catalog_retrieved_at: Optional[str] = None
     screened: int = Field(description="Objects screened against the primary")
     screening_radius_km: float
+    critical_distance_km: float = Field(description="Passes closer than this are critical (miss_distance_target_km)")
     approaches: List[ApproachRecord] = Field(description="Approaches still ahead, soonest first")
     note: str
 

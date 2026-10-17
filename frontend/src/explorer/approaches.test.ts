@@ -10,6 +10,8 @@ const pass = (norad_id: number, tca_unix: number, miss_distance_km: number): App
   tca_unix,
   miss_distance_km,
   relative_speed_kms: 12,
+  threat_state: miss_distance_km < 10 ? 'UNVERIFIED' : 'MONITORING',
+  critical: miss_distance_km < 5,
   primary_position_teme_km: [6800, 0, 0],
   secondary_position_teme_km: [6801, 0, 0],
 });
@@ -39,7 +41,7 @@ describe('active approach', () => {
         error: null,
         data: {
           primary_norad_id: 39574, primary_name: 'GPM-CORE', window_start: '', window_end: '', computed_at: '',
-          compute_s: 1, catalog_retrieved_at: null, screened: 2, screening_radius_km: 25, approaches: [a, b], note: '',
+          compute_s: 1, catalog_retrieved_at: null, screened: 2, screening_radius_km: 25, critical_distance_km: 5, approaches: [a, b], note: '',
         },
       },
       pinnedApproach: null,

@@ -7,7 +7,10 @@ starts one and is told to come back, and a result older than REFRESH_AFTER_S is 
 replacement is computed.
 
 Public GP elements carry no covariance, so no collision probability is attached: the record is the time
-of closest approach, the miss distance and the relative speed.
+of closest approach, the miss distance and the relative speed. Each pass also carries the simulator's own
+verdict: its threat state (physics/threat.py), and whether it is critical, meaning it misses the
+distance-based mitigation target the planner uses when Pc is unavailable, so the simulator would plan a
+burn for it.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from ..data import explorer_catalog
 from ..data.catalog import OrbitalObject
 from ..data.tle import object_from_tle
 from ..physics import screening
+from ..physics.threat import evaluate_threat_state, meets_mitigation_target
 from ..physics.time_utils import iso
 
 log = logging.getLogger(__name__)
@@ -65,6 +69,8 @@ def compute(now_unix: Optional[float] = None) -> Dict[str, Any]:
     approaches = []
     for c in sorted(res.conjunctions, key=lambda c: c.tca_unix):
         secondary = by_id[c.secondary_id]
+        state, _ = evaluate_threat_state(c.miss_distance_km, None, settings)
+        meets_target, _ = meets_mitigation_target(c.miss_distance_km, None, settings)
         approaches.append({
             "norad_id": secondary.norad_id,
             "name": secondary.name,
@@ -73,6 +79,8 @@ def compute(now_unix: Optional[float] = None) -> Dict[str, Any]:
             "tca_unix": c.tca_unix,
             "miss_distance_km": round(c.miss_distance_km, 3),
             "relative_speed_kms": round(c.relative_speed_kms, 3),
+            "threat_state": state,
+            "critical": not meets_target,
             "primary_position_teme_km": [round(float(x), 3) for x in c.primary_r_km],
             "secondary_position_teme_km": [round(float(x), 3) for x in c.secondary_r_km],
         })
@@ -87,6 +95,7 @@ def compute(now_unix: Optional[float] = None) -> Dict[str, Any]:
         "catalog_retrieved_at": catalog.get("retrieved_at"),
         "screened": res.stats["objects_valid"],
         "screening_radius_km": res.stats["screening_radius_km"],
+        "critical_distance_km": settings.miss_distance_target_km,
         "approaches": approaches,
         "note": NOTE,
     }

@@ -10,7 +10,7 @@ import FilterPanel from './FilterPanel';
 import FindBox from './FindBox';
 import GlobeBoundary from './GlobeBoundary';
 import { OBJECT_TYPES, activeFilterCount } from './filters';
-import { FiltersIcon } from './icons';
+import { CriticalMark, DetectedMark, FiltersIcon } from './icons';
 import { TYPE_INK } from './palette';
 import { useExplorerStore } from './store';
 
@@ -53,6 +53,8 @@ function UtcClock() {
 
 /** The globe's colour key, on the globe. */
 function GlobeKey() {
+  const highlight = useExplorerStore((s) => s.highlightDetections);
+  const critical = useExplorerStore((s) => s.approaches.data?.critical_distance_km ?? null);
   const items: [string, string][] = [
     ['var(--x-accent)', 'GPM and its orbit'],
     [TYPE_INK.PAYLOAD, 'Active satellites'],
@@ -67,7 +69,37 @@ function GlobeKey() {
           {label}
         </li>
       ))}
+      {highlight && critical !== null && (
+        <>
+          <li className="flex items-center gap-2">
+            <DetectedMark />
+            Passes near GPM
+          </li>
+          <li className="flex items-center gap-2 text-x-warning">
+            <CriticalMark />
+            Critical, under {critical} km
+          </li>
+        </>
+      )}
     </ul>
+  );
+}
+
+/** Steps the rest of the catalog back so GPM's detections read as the population around its orbit. */
+function HighlightSwitch() {
+  const on = useExplorerStore((s) => s.highlightDetections);
+  const setOn = useExplorerStore((s) => s.setHighlightDetections);
+  return (
+    <label className="x-row -mx-2 mt-2">
+      <input type="checkbox" role="switch" className="peer sr-only" checked={on} onChange={() => setOn(!on)} />
+      <span
+        className={`relative h-5 w-9 shrink-0 rounded-full border transition-[background-color,border-color] duration-150 ${on ? 'border-x-text bg-x-text' : 'border-x-control'}`}
+        aria-hidden="true"
+      >
+        <span className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full transition-[transform,background-color] duration-150 ease-[var(--x-ease)] ${on ? 'translate-x-4 bg-x-bg' : 'bg-x-muted'}`} />
+      </span>
+      <span className="flex-1 text-x-14">Highlight what GPM will pass</span>
+    </label>
   );
 }
 
@@ -112,6 +144,7 @@ function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButt
       <div className="mt-4">
         <FindBox />
       </div>
+      <HighlightSwitch />
       <ul className="mt-4" aria-label="Objects shown, by type">
         {OBJECT_TYPES.map((t) => (
           <li key={t} className="flex min-h-8 items-center gap-3">
