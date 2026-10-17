@@ -1,16 +1,6 @@
 import * as Cesium from 'cesium';
 import type { SpacecraftDesign } from '../types/api';
-import { PART_COLORS, designParts, type Axis, type Part } from './designs';
-
-/**
- * Detailed glTF models for designs that have one, already in metres in the body frame (x along
- * velocity, y cross-track, z radial); see scripts/prepare_models.py. `nativeWidthM` is the
- * model's cross-track span, so the model is scaled uniformly to the design's published width.
- */
-const MODEL_ASSETS: Record<string, { url: string; nativeWidthM: number; credit: string }> = {
-  iss: { url: `${import.meta.env.BASE_URL}models/iss.glb`, nativeWidthM: 109, credit: 'NASA/Michael D. Carbajal' },
-  gpm: { url: `${import.meta.env.BASE_URL}models/gpm.glb`, nativeWidthM: 13, credit: 'NASA/Christopher R. Meaney' },
-};
+import { MODEL_ASSETS, PART_COLORS, designParts, type Axis, type Part } from './designs';
 
 /** Smallest on-screen size (pixels across the envelope) at which the 3D model replaces the marker. */
 const MIN_MODEL_PIXELS = 6;

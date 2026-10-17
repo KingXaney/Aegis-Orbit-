@@ -202,6 +202,7 @@ export function setPoints(points: THREE.Points, flat: Float32Array, fadeCenter =
 
 export function disposeObject(obj: THREE.Object3D): void {
   obj.traverse((o) => {
+    if (o.userData.sharedAsset) return; // glTF geometry/materials shared by every clone (see spacecraftModel.ts)
     const mesh = o as THREE.Mesh;
     if (mesh.geometry && !(mesh.geometry instanceof RoundedBoxGeometry)) mesh.geometry.dispose();
     const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;

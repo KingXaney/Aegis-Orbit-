@@ -20,7 +20,7 @@ environment.
 6. Re-screens every candidate's post-burn trajectory against the catalog (secondary screening).
 7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
 8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns the tiers shown in the view (CRITICAL / SEMI_CRITICAL / ML_WATCH). The model only ranks; every displayed distance and time is computed.
-9. Visualises the emergency in a Waymo-style **encounter view** (Three.js): a chase camera behind the spacecraft, a glowing path ribbon as wide as the satellite, blue boxes for the nearby semi-critical objects, red-outlined boxes for the critical ones with their relative-motion trails, and the path bending around the debris once a maneuver is selected or approved. Two geometries are available with a toggle: an *encounter map* (ahead = time to closest approach, sideways = true miss offset) and a *true-scale chase camera*. The CesiumJS globe stays available as a minimap that can be swapped to full size.
+9. Visualises the emergency in a Waymo-style **encounter view** (Three.js): a chase camera behind the spacecraft, which is drawn with the same true-scale design model the globe's Close-up uses (NASA's glTF for the ISS and GPM, part-built for other designs), a glowing path ribbon as wide as the satellite, blue boxes for the nearby semi-critical objects, red-outlined boxes for the critical ones with their relative-motion trails, and the path bending around the debris once a maneuver is selected or approved. Two geometries are available with a toggle: an *encounter map* (ahead = time to closest approach, sideways = true miss offset) and a *true-scale chase camera*. The CesiumJS globe stays available as a minimap that can be swapped to full size.
 10. Requires explicit human approval before the simulated maneuver is applied.
 
 ## Stack
@@ -60,7 +60,7 @@ API docs: <http://localhost:8000/docs>. Health: <http://localhost:8000/api/healt
 ```bash
 cd frontend
 npm install
-npm run dev          # copies Cesium's static assets to public/cesium and starts Vite on :5173
+npm run dev          # copies Cesium's static assets (public/cesium) and Three's Draco decoder (public/draco), starts Vite on :5173
 ```
 
 Open <http://localhost:5173> for the catalog explorer: every tracked object on orbit, propagated live
@@ -207,7 +207,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Single-user in-memory sessions; restarting the backend clears screenings, plans and decisions (the scenario definitions are deterministic and reload identically).
 * The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
-* The encounter map is a schematic projection (nonlinear time and lateral scales, enlarged objects); the chase camera is true scale but, at orbital speeds, an object crosses the 100 km view in about 13 s of simulation time.
+* The encounter map is a schematic projection (nonlinear time and lateral scales, enlarged objects); the chase camera is true scale apart from the spacecraft model, which is enlarged by the factor its legend states, but, at orbital speeds, an object crosses the 100 km view in about 13 s of simulation time.
 
 ## Data attribution
 

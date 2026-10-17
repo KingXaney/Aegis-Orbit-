@@ -4,10 +4,11 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import type { LayerFlags } from '../globe/scene';
 import type { SimulationController } from '../simulation/controller';
 import { SampledTrajectory } from '../simulation/trajectory';
-import type { Maneuver, ObjectSummary, PerceptionTier, ScenarioDetail, Trajectory } from '../types/api';
+import type { Maneuver, ObjectSummary, PerceptionTier, ScenarioDetail, SpacecraftDesign, Trajectory } from '../types/api';
 import { DEFAULT_THRESHOLDS, MAP, alongUnits, inverseAlong, laneTicks, lateralUnits, objectMapPosition, timeTicks, trailMapOffsets, type EncounterThresholds } from './encounterMap';
 import type { EncounterItem } from './encounters';
-import { disposeObject, makeDashedLine, makeDisc, makeLine, makePoints, makeRibbon, makeRing, makeSpacecraft, roundedBox, setLinePoints, setPoints, type Ribbon } from './geometry';
+import { disposeObject, makeDashedLine, makeDisc, makeLine, makePoints, makeRibbon, makeRing, roundedBox, setLinePoints, setPoints, type Ribbon } from './geometry';
+import { SpacecraftVisual, type SpacecraftModelKind } from './spacecraftModel';
 import { fmtCountdown, fmtKm, makeLabel, setLabel, type LabelKind } from './labels';
 import { DEFAULT_PLANE, chaseRibbonPoints, ribbonProfile, sampleProfile, type PlaneBasis } from './ribbon';
 import { relativeStateRtn, rtnToWorld } from './rtn';
@@ -107,6 +108,9 @@ export class EncounterScene {
   private readonly chaseSat: THREE.Group;
   private readonly mapGhostSat: THREE.Group;
   private readonly chaseGhostSat: THREE.Group;
+  /** The primary's design-based model (same as the globe's Close-up) in both modes plus the two ghosts. */
+  private readonly satVisuals: SpacecraftVisual[];
+  private primaryDesign: SpacecraftDesign | null = null;
   private readonly satLabel: CSS2DObject;
   private readonly burnMarker: THREE.Mesh;
   private readonly burnLabel: CSS2DObject;
@@ -130,10 +134,13 @@ export class EncounterScene {
 
     this.scene.background = new THREE.Color('#05080f');
     this.scene.fog = new THREE.Fog('#05080f', 70, 150);
-    this.scene.add(new THREE.HemisphereLight('#93c5fd', '#0b1220', 0.9));
-    const sun = new THREE.DirectionalLight('#ffffff', 0.7);
+    // Only the spacecraft model is lit (everything else is unlit); intensities suit its PBR materials.
+    this.scene.add(new THREE.HemisphereLight('#cfe3ff', '#1b2740', 1.6));
+    const sun = new THREE.DirectionalLight('#ffffff', 2.4);
     sun.position.set(5, 10, 6);
-    this.scene.add(sun);
+    const fill = new THREE.DirectionalLight('#9fb7ff', 0.9);
+    fill.position.set(-6, 3, -8);
+    this.scene.add(sun, fill);
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.5, 500);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -168,10 +175,15 @@ export class EncounterScene {
     this.candidateRibbon.group.visible = false;
     this.ghostLine = makeDashedLine('#67e8f9', 0.55, 0.9, 0.6);
     this.ghostLine.visible = false;
-    this.mapSat = makeSpacecraft(MAP.SAT_SPAN_UNITS);
-    this.chaseSat = makeSpacecraft(CHASE.SAT_SPAN_KM);
-    this.mapGhostSat = makeSpacecraft(MAP.SAT_SPAN_UNITS, true);
-    this.chaseGhostSat = makeSpacecraft(CHASE.SAT_SPAN_KM, true);
+    const mapVisual = new SpacecraftVisual(MAP.SAT_SPAN_UNITS, { halo: true });
+    const chaseVisual = new SpacecraftVisual(CHASE.SAT_SPAN_KM);
+    const mapGhost = new SpacecraftVisual(MAP.SAT_SPAN_UNITS, { ghost: true });
+    const chaseGhost = new SpacecraftVisual(CHASE.SAT_SPAN_KM, { ghost: true });
+    this.satVisuals = [mapVisual, chaseVisual, mapGhost, chaseGhost];
+    this.mapSat = mapVisual.group;
+    this.chaseSat = chaseVisual.group;
+    this.mapGhostSat = mapGhost.group;
+    this.chaseGhostSat = chaseGhost.group;
     this.mapGhostSat.visible = false;
     this.chaseGhostSat.visible = false;
     this.satLabel = makeLabel('satellite', 'primary');
@@ -214,6 +226,8 @@ export class EncounterScene {
     this.objects.clear();
     for (const o of objects) this.objects.set(o.object_id, o);
     this.primaryName = this.objects.get(detail.primary_id)?.name ?? detail.primary_id;
+    this.primaryDesign = this.objects.get(detail.primary_id)?.design ?? null;
+    for (const v of this.satVisuals) v.setDesign(this.primaryDesign);
     this.trajectories.clear();
     for (const t of trajectories) this.trajectories.set(t.object_id, new SampledTrajectory(t));
     this.primaryTraj = this.trajectories.get(detail.primary_id) ?? null;
@@ -263,9 +277,12 @@ export class EncounterScene {
     this.applyMode();
   }
 
-  stats(): { mode: EncounterMode; objects: number; visible: number; now: number; ribbonRows: number } {
+  stats(): { mode: EncounterMode; objects: number; visible: number; now: number; ribbonRows: number; spacecraft: string | null; spacecraftModel: SpacecraftModelKind } {
     const list = this.mode === 'map' ? this.visuals : Array.from(this.chaseVisuals.values());
-    return { mode: this.mode, objects: this.items.length, visible: list.filter((v) => v.group.visible).length, now: this.controller.currentUnix, ribbonRows: RIBBON_ROWS };
+    return {
+      mode: this.mode, objects: this.items.length, visible: list.filter((v) => v.group.visible).length, now: this.controller.currentUnix, ribbonRows: RIBBON_ROWS,
+      spacecraft: this.primaryDesign?.design_id ?? null, spacecraftModel: this.satVisuals[0].kind,
+    };
   }
 
   destroy(): void {
@@ -277,6 +294,7 @@ export class EncounterScene {
     el.removeEventListener('pointerup', this.onPointerUp);
     el.removeEventListener('webglcontextlost', this.onContextLost);
     this.controls.dispose();
+    for (const v of this.satVisuals) v.dispose();
     this.clearVisuals();
     this.scene.traverse((o) => {
       if (o instanceof CSS2DObject) o.element.remove();

@@ -36,6 +36,7 @@ export default function EncounterView({ mini = false }: { mini?: boolean }) {
     () => buildEncounters({ perception, perceptionManeuvered, screening, objects, scenario }),
     [perception, perceptionManeuvered, screening, objects, scenario],
   );
+  const primaryDesign = scenario ? objects[scenario.primary_id]?.design ?? null : null;
 
   useEffect(() => {
     if (!containerRef.current || sceneRef.current) return;
@@ -104,7 +105,7 @@ export default function EncounterView({ mini = false }: { mini?: boolean }) {
     <div className="absolute inset-0 overflow-hidden bg-bg">
       <div ref={containerRef} className="absolute inset-0" aria-label="Encounter view" />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 55%, rgba(5,8,15,0.65) 100%)' }} />
-      {!mini && showLegend && <EncounterLegend mode={mode} thresholds={built.thresholds} basis={built.basis} count={built.items.length} />}
+      {!mini && showLegend && <EncounterLegend mode={mode} thresholds={built.thresholds} basis={built.basis} count={built.items.length} spacecraft={primaryDesign} />}
       {!mini && perceptionError && (
         <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded border border-warn/50 bg-panel/90 px-2 py-1 text-[10px] text-warn">
           perception unavailable — showing screening results
