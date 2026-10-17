@@ -1,12 +1,16 @@
 import '@fontsource/b612/400.css';
 import '@fontsource/b612/700.css';
+import '@fontsource/b612-mono/400.css';
+import '@fontsource/barlow-condensed/600.css';
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../api/client';
 import { formatUtc } from '../lib/format';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
-import { OBJECT_TYPES, TYPE_COLOR, activeFilterCount } from './filters';
+import { OBJECT_TYPES, activeFilterCount } from './filters';
 import GlobeCanvas from './GlobeCanvas';
+import { FiltersIcon } from './icons';
+import { TYPE_INK } from './palette';
 import { useExplorerStore } from './store';
 
 const nf = new Intl.NumberFormat('en-US');
@@ -29,7 +33,7 @@ function SiteNav() {
             key={p.href}
             href={p.href}
             aria-current={current ? 'page' : undefined}
-            className={`x-focus rounded-full px-3.5 py-1.5 text-[12px] transition-colors ${current ? 'bg-x-readout text-x-void' : 'text-x-muted hover:text-x-readout'}`}
+            className={`x-focus rounded-full px-3.5 py-1.5 text-x-12 transition-colors ${current ? 'bg-x-text text-x-bg' : 'text-x-muted hover:text-x-text'}`}
           >
             {p.label}
           </a>
@@ -46,10 +50,10 @@ function LiveClock() {
     return () => clearInterval(t);
   }, []);
   return (
-    <p className="flex items-center gap-2 text-[12px] text-x-muted">
-      <span className="x-live-dot h-1.5 w-1.5 rounded-full bg-x-payload" aria-hidden="true" />
+    <p className="flex items-center gap-2 text-x-12 text-x-muted">
+      <span className="h-1.5 w-1.5 rounded-full bg-x-payload" aria-hidden="true" />
       Live
-      <span className="tabular-nums text-x-readout">{formatUtc(now, false)}</span>
+      <span className="tabular-nums text-x-text">{formatUtc(now, false)}</span>
     </p>
   );
 }
@@ -68,13 +72,9 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
       onClick={() => setOpen(!open)}
       className="x-button pointer-events-auto flex items-center gap-2 rounded-full px-3 py-2 md:px-4"
     >
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
-        <path d="M2 4h7M13 4h1M2 12h1M7 12h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        <circle cx="11" cy="4" r="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-        <circle cx="5" cy="12" r="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-      <span className="hidden text-[14px] md:inline">Filters</span>
-      {active > 0 && <span className="rounded-full bg-x-payload px-1.5 text-[11px] font-bold leading-[18px] text-x-void">{active}</span>}
+      <FiltersIcon />
+      <span className="hidden text-x-14 md:inline">Filters</span>
+      {active > 0 && <span className="rounded-full bg-x-accent px-1.5 text-x-12 font-bold leading-[18px] text-x-bg">{active}</span>}
     </button>
   );
 }
@@ -89,23 +89,23 @@ function Stats() {
       <ul className="flex items-start justify-center gap-6 md:gap-12" aria-label="Objects shown, by type" aria-live="polite">
         {OBJECT_TYPES.map((t) => (
           <li key={t} className="flex flex-col items-center">
-            <span className="text-[21px] font-bold tabular-nums leading-none md:text-[36px]">{nf.format(byType[t])}</span>
-            <span className="mt-2 flex items-center gap-1.5 text-[12px] text-x-muted md:text-[14px]">
-              <span className="h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[t], boxShadow: `0 0 8px ${TYPE_COLOR[t]}` }} aria-hidden="true" />
+            <span className="text-x-21 font-bold tabular-nums leading-none md:text-x-36">{nf.format(byType[t])}</span>
+            <span className="mt-2 flex items-center gap-1.5 text-x-12 text-x-muted md:text-x-14">
+              <span className="h-2 w-2 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
               {STAT_LABEL[t]}
             </span>
           </li>
         ))}
       </ul>
       {active > 0 ? (
-        <p className="text-[12px] text-x-muted">
+        <p className="text-x-12 text-x-muted">
           Filtered view.{' '}
-          <button type="button" onClick={resetFilters} className="x-focus pointer-events-auto rounded text-x-payload hover:underline">
+          <button type="button" onClick={resetFilters} className="x-link pointer-events-auto">
             Show everything
           </button>
         </p>
       ) : (
-        <p className="hidden text-[11px] text-x-muted md:block">Orbital data from CelesTrak. Positions are SGP4 estimates.</p>
+        <p className="hidden text-x-12 text-x-muted md:block">Orbital data from CelesTrak. Positions are SGP4 estimates.</p>
       )}
     </div>
   );
@@ -132,14 +132,14 @@ export default function ExplorerPage() {
   }, [panelOpen]);
 
   return (
-    <div className="explorer relative h-full w-full overflow-hidden bg-x-void font-b612 text-x-readout">
+    <div className="explorer relative h-full w-full overflow-hidden bg-x-bg font-x-body text-x-text">
       <GlobeCanvas />
 
       <div className="pointer-events-none absolute inset-0">
         <header className="x-over-globe flex flex-col items-center px-4 pt-4 md:pt-5">
           <SiteNav />
-          <h1 className="mt-4 text-[24px] font-bold leading-none tracking-[-0.02em] md:mt-5 md:text-[36px]">Aegis Orbit</h1>
-          <p className="mt-2 text-center text-[12px] text-x-muted md:text-[14px]">Every tracked object in Earth orbit, moving in real time</p>
+          <h1 className="x-display mt-4 text-x-28 md:mt-5 md:text-x-36">Aegis Orbit</h1>
+          <p className="mt-2 text-center text-x-12 text-x-muted md:text-x-14">Every tracked object in Earth orbit, moving in real time</p>
         </header>
 
         <div className="absolute left-5 top-6 hidden md:block">
@@ -160,17 +160,17 @@ export default function ExplorerPage() {
         )}
 
         {status === 'loading' && (
-          <p className="absolute inset-x-0 top-1/2 text-center text-[14px] text-x-muted" role="status">
+          <p className="absolute inset-x-0 top-1/2 text-center text-x-14 text-x-muted" role="status">
             Loading the orbital catalog…
           </p>
         )}
 
         {status === 'error' && (
           <div className="x-panel pointer-events-auto absolute left-1/2 top-1/2 w-[min(440px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 p-5" role="alert">
-            <h2 className="text-[14px] font-bold">Can’t load the catalog from {API_BASE}</h2>
-            <p className="mt-2 text-[12px] text-x-muted">{error}</p>
-            <p className="mt-2 text-[12px] text-x-muted">
-              Start the backend with <code className="text-x-readout">uvicorn app.main:app --reload</code> in <code className="text-x-readout">backend/</code>, then retry.
+            <h2 className="text-x-14 font-bold">Can’t load the catalog from {API_BASE}</h2>
+            <p className="mt-2 text-x-12 text-x-muted">{error}</p>
+            <p className="mt-2 text-x-12 text-x-muted">
+              Start the backend with <code className="text-x-text">uvicorn app.main:app --reload</code> in <code className="text-x-text">backend/</code>, then retry.
             </p>
             <button type="button" onClick={() => void load()} className="x-button mt-4">
               Retry
@@ -179,7 +179,7 @@ export default function ExplorerPage() {
         )}
 
         {sceneError && (
-          <p className="absolute inset-x-6 top-1/2 text-center text-[14px] text-x-debris" role="alert">
+          <p className="absolute inset-x-6 top-1/2 text-center text-x-14 text-x-debris" role="alert">
             The 3D globe couldn’t start, so WebGL may be unavailable in this browser: {sceneError}
           </p>
         )}

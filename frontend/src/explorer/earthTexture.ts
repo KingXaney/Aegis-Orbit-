@@ -3,19 +3,20 @@ import { feature } from 'topojson-client';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import landUrl from 'world-atlas/land-50m.json?url';
 
-// A flat, vector-drawn Earth: dark ocean, a slightly lighter land fill, thin coastlines and a faint
+// A flat, vector-drawn Earth: dark ocean, a lighter slate land fill, thin coastlines and a faint
 // 10° graticule, rasterised once into an equirectangular texture. Clean at every zoom the explorer
-// uses, and dark enough that the coloured objects carry the picture.
+// uses; land reads clearly against the ocean but stays dark enough that the objects carry the picture.
 
-export const EARTH_COLORS = {
-  ocean: '#060f1f',
-  land: '#18294a',
-  coast: '#3a5583',
-  graticule: 'rgba(120, 150, 200, 0.07)',
-};
+export interface EarthColors {
+  ocean: string;
+  land: string;
+  coast: string;
+}
+
+const GRATICULE = 'rgba(154, 163, 175, 0.08)';
 
 /** Draws the texture and returns an object URL for it (an equirectangular image, 2:1). */
-export async function buildEarthTexture(width = 8192): Promise<string> {
+export async function buildEarthTexture(width: number, colors: EarthColors): Promise<string> {
   const height = width / 2;
   const topo = (await (await fetch(landUrl)).json()) as Topology<{ land: GeometryCollection }>;
   const land = feature(topo, topo.objects.land);
@@ -30,20 +31,20 @@ export async function buildEarthTexture(width = 8192): Promise<string> {
   const path = geoPath(projection, ctx);
   const px = width / 4096; // line widths are tuned at 4096 px
 
-  ctx.fillStyle = EARTH_COLORS.ocean;
+  ctx.fillStyle = colors.ocean;
   ctx.fillRect(0, 0, width, height);
 
   ctx.beginPath();
   path(geoGraticule10());
-  ctx.strokeStyle = EARTH_COLORS.graticule;
+  ctx.strokeStyle = GRATICULE;
   ctx.lineWidth = 1 * px;
   ctx.stroke();
 
   ctx.beginPath();
   path(land);
-  ctx.fillStyle = EARTH_COLORS.land;
+  ctx.fillStyle = colors.land;
   ctx.fill();
-  ctx.strokeStyle = EARTH_COLORS.coast;
+  ctx.strokeStyle = colors.coast;
   ctx.lineWidth = 1.2 * px;
   ctx.lineJoin = 'round';
   ctx.stroke();

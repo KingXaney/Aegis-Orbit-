@@ -1,7 +1,8 @@
 import * as Cesium from 'cesium';
 import type { CatalogObject, CatalogObjectType, OrbitClass } from '../types/api';
-import { EARTH_COLORS, buildEarthTexture } from './earthTexture';
-import { MODEL_COLOR, MODEL_NORAD_ID, TYPE_COLOR } from './filters';
+import { buildEarthTexture } from './earthTexture';
+import { MODEL_NORAD_ID } from './filters';
+import { readPalette, type Palette } from './palette';
 import { STRIDE, gmst } from './propagation';
 
 // Catalog globe. Every object is a point primitive positioned in TEME (metres); the point, polyline,
@@ -13,19 +14,13 @@ export interface ExplorerSceneCallbacks {
   onPick: (index: number | null) => void;
 }
 
-const COLORS: Record<CatalogObjectType, Cesium.Color> = {
-  PAYLOAD: Cesium.Color.fromCssColorString(TYPE_COLOR.PAYLOAD),
-  DEBRIS: Cesium.Color.fromCssColorString(TYPE_COLOR.DEBRIS),
-  ROCKET_BODY: Cesium.Color.fromCssColorString(TYPE_COLOR.ROCKET_BODY),
-};
 // Solid, anti-aliased dots (pixels). Debris is the most numerous, so it is the smallest and slightly
 // translucent, which keeps dense shells from merging into a smear.
 const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 3, ROCKET_BODY: 3.5 };
 const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.85, ROCKET_BODY: 0.95 };
 const SELECTED_SIZE = 8;
-// The model spacecraft: a green dot larger than the rest, a soft steady halo so it can be found at a
+// The model spacecraft: a magenta dot larger than the rest, a soft steady halo so it can be found at a
 // glance, and two staggered ripples that grow and fade so one is always on screen.
-const MODEL = Cesium.Color.fromCssColorString(MODEL_COLOR);
 const MODEL_SIZE = 6;
 const HALO_SIZE = 14;
 const PULSE_PERIOD_S = 2;
@@ -53,6 +48,9 @@ function ringSprite(): HTMLCanvasElement {
 export class ExplorerScene {
   readonly viewer: Cesium.Viewer;
   private readonly callbacks: ExplorerSceneCallbacks;
+  private readonly palette: Palette;
+  private readonly colors: Record<CatalogObjectType, Cesium.Color>;
+  private readonly model: Cesium.Color;
   private readonly points: Cesium.PointPrimitiveCollection;
   private readonly pulse: Cesium.PointPrimitiveCollection;
   private readonly pulseHalo: Cesium.PointPrimitive;
@@ -95,6 +93,10 @@ export class ExplorerScene {
 
   constructor(container: HTMLElement, callbacks: ExplorerSceneCallbacks) {
     this.callbacks = callbacks;
+    this.palette = readPalette();
+    const css = (c: string) => Cesium.Color.fromCssColorString(c);
+    this.colors = { PAYLOAD: css(this.palette.types.PAYLOAD), DEBRIS: css(this.palette.types.DEBRIS), ROCKET_BODY: css(this.palette.types.ROCKET_BODY) };
+    this.model = css(this.palette.accent);
     this.reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
     this.viewer = new Cesium.Viewer(container, {
@@ -124,9 +126,9 @@ export class ExplorerScene {
     // Evenly lit, no day/night shading: the globe is a backdrop for the objects.
     scene.globe.enableLighting = false;
     scene.globe.showGroundAtmosphere = false;
-    scene.globe.baseColor = Cesium.Color.fromCssColorString(EARTH_COLORS.ocean);
+    scene.globe.baseColor = Cesium.Color.fromCssColorString(this.palette.ocean);
     scene.postProcessStages.fxaa.enabled = false;
-    scene.backgroundColor = Cesium.Color.fromCssColorString('#03060c');
+    scene.backgroundColor = Cesium.Color.fromCssColorString(this.palette.bg);
     if (scene.sun) scene.sun.show = false;
     if (scene.moon) scene.moon.show = false;
     scene.fog.enabled = false;
@@ -136,9 +138,9 @@ export class ExplorerScene {
 
     // Added first so the ring draws beneath the dots.
     this.pulse = scene.primitives.add(new Cesium.PointPrimitiveCollection());
-    this.pulseHalo = this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: HALO_SIZE, color: MODEL.withAlpha(0.28), show: false });
+    this.pulseHalo = this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: HALO_SIZE, color: this.model.withAlpha(0.28), show: false });
     this.pulseRings = [0, 1].map(() =>
-      this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: PULSE_START_PX, color: Cesium.Color.TRANSPARENT, outlineColor: MODEL, outlineWidth: 2, show: false }),
+      this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: PULSE_START_PX, color: Cesium.Color.TRANSPARENT, outlineColor: this.model, outlineWidth: 2, show: false }),
     );
     this.points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
     this.paths = scene.primitives.add(new Cesium.PolylineCollection());
@@ -147,11 +149,11 @@ export class ExplorerScene {
     this.ring = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), width: 30, height: 30, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
     const labelOptions = {
       position: new Cesium.Cartesian3(),
-      font: '13px B612, sans-serif',
-      fillColor: Cesium.Color.fromCssColorString('#e2eaf5'),
+      font: '14px B612, sans-serif',
+      fillColor: Cesium.Color.fromCssColorString(this.palette.text),
       showBackground: true,
-      backgroundColor: Cesium.Color.fromCssColorString('#0a1220').withAlpha(0.8),
-      backgroundPadding: new Cesium.Cartesian2(7, 4),
+      backgroundColor: Cesium.Color.fromCssColorString(this.palette.surface).withAlpha(0.92),
+      backgroundPadding: new Cesium.Cartesian2(8, 4),
       pixelOffset: new Cesium.Cartesian2(14, 0),
       horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
       verticalOrigin: Cesium.VerticalOrigin.CENTER,
@@ -194,7 +196,7 @@ export class ExplorerScene {
 
   private async addEarth(width: number): Promise<void> {
     try {
-      const url = await buildEarthTexture(width);
+      const url = await buildEarthTexture(width, this.palette);
       if (this.destroyed) {
         URL.revokeObjectURL(url);
         return;
@@ -354,7 +356,7 @@ export class ExplorerScene {
   // ------------------------------------------------------------------ colour
 
   private baseColor(i: number): Cesium.Color {
-    return i === this.modelIndex ? MODEL : COLORS[this.objects[i].type];
+    return i === this.modelIndex ? this.model : this.colors[this.objects[i].type];
   }
 
   private baseAlpha(i: number): number {
@@ -374,14 +376,14 @@ export class ExplorerScene {
     if (!visible) return;
     for (const p of parts) p.position = this.scratchPos;
     const dim = this.selected !== null && i !== this.selected ? DIMMED_ALPHA : 1;
-    this.pulseHalo.color = Cesium.Color.clone(MODEL, this.scratchColor).withAlpha(0.28 * dim, this.scratchColor);
+    this.pulseHalo.color = Cesium.Color.clone(this.model, this.scratchColor).withAlpha(0.28 * dim, this.scratchColor);
     this.pulseRings.forEach((ring, k) => {
       const phase = this.reducedMotion ? 0.35 + k * 0.3 : ((t / PULSE_PERIOD_S + k / this.pulseRings.length) % 1);
       ring.pixelSize = PULSE_START_PX + phase * (PULSE_END_PX - PULSE_START_PX);
       const a = (1 - phase) * dim;
       // Fresh colours: the getters return the primitive's own objects, and assigning those back is a no-op.
-      ring.outlineColor = MODEL.withAlpha(0.9 * a);
-      ring.color = MODEL.withAlpha(0.18 * a);
+      ring.outlineColor = this.model.withAlpha(0.9 * a);
+      ring.color = this.model.withAlpha(0.18 * a);
     });
   }
 
