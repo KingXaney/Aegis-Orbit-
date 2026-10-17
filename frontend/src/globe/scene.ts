@@ -15,7 +15,7 @@ export interface LayerFlags {
   labels: boolean;
 }
 
-export type CameraMode = 'follow' | 'closeup' | 'free';
+export type CameraMode = 'follow' | 'closeup';
 
 export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
@@ -79,7 +79,6 @@ export class GlobeScene {
   private preUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
   private destroyed = false;
-  private lastFixedPrimary = new Cesium.Cartesian3();
   /** True-scale models for the primary, highlighted objects and the current threat object. */
   private models = new Map<string, { model: SpacecraftModel; traj: SampledTrajectory }>();
   private conjunctionModelId: string | null = null;
@@ -529,9 +528,8 @@ export class GlobeScene {
 
   private applyCameraMode(): void {
     if (this.destroyed) return;
-    const tracking = this.cameraMode !== 'free' && this.primaryEntity;
     this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = this.cameraMode === 'closeup' ? CLOSEUP_MIN_ZOOM_M : MIN_ZOOM_M;
-    if (tracking && this.primaryEntity) {
+    if (this.primaryEntity) {
       // re-track so Cesium applies the mode's viewFrom offset
       this.primaryEntity.viewFrom = this.viewFromFor(this.cameraMode);
       this.viewer.trackedEntity = undefined;
@@ -542,28 +540,15 @@ export class GlobeScene {
     }
   }
 
+  /** Re-track the primary with the current mode's offset (the camera always tracks the primary). */
   resetCamera(): void {
     this.viewer.trackedEntity = undefined;
     this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-    const traj = this.primaryId ? this.trajectories.get(this.primaryId) : null;
-    const p = traj?.positionAt(this.controller.currentUnix);
-    if (p && this.cameraMode === 'free') {
-      const fixed = temeToFixed(this.bridge.toJulian(this.controller.currentUnix), p, this.lastFixedPrimary);
-      const carto = Cesium.Cartographic.fromCartesian(fixed);
-      this.viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, 18_000_000),
-        duration: 1.2,
-      });
-    } else {
-      this.applyCameraMode();
-    }
+    this.applyCameraMode();
   }
 
   flyToPrimary(): void {
-    if (this.primaryEntity) {
-      if (this.cameraMode === 'free') this.cameraMode = 'follow';
-      this.applyCameraMode();
-    }
+    if (this.primaryEntity) this.applyCameraMode();
   }
 
   // ------------------------------------------------------------------ cleanup

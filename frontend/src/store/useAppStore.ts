@@ -83,6 +83,8 @@ export interface AppState {
   encounterCameraResetNonce: number;
   autoSlowNearTca: boolean;
   showLegend: boolean;
+  /** The right-hand mission panel is open (collapsed to a handle otherwise). */
+  missionPanelOpen: boolean;
 
   selectedConjunction: () => Conjunction | null;
   selectedManeuver: () => Maneuver | null;
@@ -114,6 +116,7 @@ export interface AppState {
   selectEncounter: (objectId: string | null, conjunctionId: string | null) => void;
   setAutoSlowNearTca: (on: boolean) => void;
   toggleLegend: () => void;
+  toggleMissionPanel: () => void;
 }
 
 const EMPTY_SESSION = {
@@ -137,6 +140,16 @@ const EMPTY_SESSION = {
 } as const;
 
 let perceptionRequestId = 0;
+
+const MISSION_PANEL_KEY = 'aegis-orbit.missionPanelOpen';
+
+function readMissionPanelOpen(): boolean {
+  try {
+    return localStorage.getItem(MISSION_PANEL_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
 
 export const useAppStore = create<AppState>()((set, get) => ({
   backendStatus: 'checking',
@@ -185,6 +198,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   encounterCameraResetNonce: 0,
   autoSlowNearTca: true,
   showLegend: true,
+  missionPanelOpen: readMissionPanelOpen(),
 
   selectedConjunction: () => {
     const { screening, selectedConjunctionId } = get();
@@ -470,6 +484,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
   setAutoSlowNearTca: (on) => set({ autoSlowNearTca: on }),
   toggleLegend: () => set({ showLegend: !get().showLegend }),
+  toggleMissionPanel: () => {
+    const open = !get().missionPanelOpen;
+    try {
+      localStorage.setItem(MISSION_PANEL_KEY, open ? '1' : '0');
+    } catch {
+      // storage unavailable (private window, blocked site data): the choice lasts for this session only
+    }
+    set({ missionPanelOpen: open });
+  },
 }));
 
 async function hydratePlan(

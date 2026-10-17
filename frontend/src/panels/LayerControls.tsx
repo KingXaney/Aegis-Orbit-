@@ -10,7 +10,7 @@ export default function LayerControls() {
   const scenario = useAppStore((s) => s.scenario);
 
   return (
-    <details className="pointer-events-auto w-[230px] rounded border border-line bg-panel/85 p-3 backdrop-blur">
+    <details className="pointer-events-auto w-[230px] rounded border border-line bg-panel/85 p-3 backdrop-blur xl:w-[300px]">
       <summary className="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Globe camera &amp; layers</summary>
       <div className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Camera</div>
       <div className="mb-3 flex gap-1.5">
@@ -19,9 +19,6 @@ export default function LayerControls() {
         </Button>
         <Button size="sm" variant={cameraMode === 'closeup' ? 'primary' : 'secondary'} onClick={() => setCameraMode('closeup')} title="Frame the primary's true-scale model">
           Close-up
-        </Button>
-        <Button size="sm" variant={cameraMode === 'free' ? 'primary' : 'secondary'} onClick={() => setCameraMode('free')}>
-          Free
         </Button>
         <Button size="sm" variant="ghost" onClick={resetCamera} title="Reset camera">
           Reset

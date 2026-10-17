@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import GlobeView from './globe/GlobeView';
 import EncounterView from './encounter/EncounterView';
 import EncounterControls from './encounter/EncounterControls';
@@ -12,7 +12,11 @@ import { useAppStore } from './store/useAppStore';
 import { Button, Spinner, ViewFrame } from './components/ui';
 
 const STAGE = 'absolute inset-0';
-const MINI = 'absolute bottom-[92px] left-3 z-10 hidden h-[210px] w-[300px] overflow-hidden rounded border border-line bg-bg shadow-lg md:block';
+const MINI = 'absolute left-3 z-10 hidden h-[210px] w-[300px] overflow-hidden rounded border border-line bg-bg shadow-lg transition-[bottom] duration-150 motion-reduce:transition-none md:block';
+const MINI_H = 210;
+const MINI_GAP = 8; // between the minimap and the bottom HUD row (layer panel + timeline)
+const HUD_PAD = 12; // the HUD overlay's p-3
+const MIN_HEADROOM = 140; // space the minimap must leave for the top bar; below that it hides instead of overlapping
 
 export default function App() {
   const init = useAppStore((s) => s.init);
@@ -27,6 +31,11 @@ export default function App() {
   const scenarioId = useAppStore((s) => s.scenarioId);
   const mainView = useAppStore((s) => s.mainView);
   const swapMainView = useAppStore((s) => s.swapMainView);
+  const missionPanelOpen = useAppStore((s) => s.missionPanelOpen);
+  const toggleMissionPanel = useAppStore((s) => s.toggleMissionPanel);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const bottomRowRef = useRef<HTMLDivElement>(null);
+  const [miniLayout, setMiniLayout] = useState({ bottom: 92, hidden: false });
 
   useEffect(() => {
     void init();
@@ -67,33 +76,53 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // The minimap floats above the bottom HUD row (layer panel + timeline). Measuring that row makes the
+    // minimap move up when "Globe camera & layers" is expanded instead of being covered by it.
+    const stage = stageRef.current;
+    const row = bottomRowRef.current;
+    if (!stage || !row) return;
+    const update = () => {
+      const bottom = HUD_PAD + Math.round(row.getBoundingClientRect().height) + MINI_GAP;
+      const hidden = stage.clientHeight - bottom - MINI_H < MIN_HEADROOM;
+      setMiniLayout((prev) => (prev.bottom === bottom && prev.hidden === hidden ? prev : { bottom, hidden }));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (!notice) return;
     const t = setTimeout(dismissNotice, 5000);
     return () => clearTimeout(t);
   }, [notice, dismissNotice]);
 
+  const miniStyle = { bottom: miniLayout.bottom, display: miniLayout.hidden ? 'none' : undefined };
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg lg:flex-row">
-      <div className="relative h-[55vh] min-h-[320px] w-full lg:h-full lg:min-h-0 lg:flex-1">
-        <div className={mainView === 'encounter' ? STAGE : MINI}>
+      <div ref={stageRef} className={`relative w-full lg:h-full lg:min-h-0 lg:flex-1 ${missionPanelOpen ? 'h-[55vh] min-h-[320px]' : 'min-h-0 flex-1'}`}>
+        <div className={mainView === 'encounter' ? STAGE : MINI} style={mainView === 'encounter' ? undefined : miniStyle}>
           <ViewFrame mini={mainView !== 'encounter'} label="Encounter" onSwap={swapMainView}>
             <EncounterView mini={mainView !== 'encounter'} />
           </ViewFrame>
         </div>
-        <div className={mainView === 'globe' ? STAGE : MINI}>
+        <div className={mainView === 'globe' ? STAGE : MINI} style={mainView === 'globe' ? undefined : miniStyle}>
           <ViewFrame mini={mainView !== 'globe'} label="Globe" onSwap={swapMainView}>
             <GlobeView mini={mainView !== 'globe'} />
           </ViewFrame>
         </div>
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <TopBar />
-            <div className="flex flex-col items-end gap-2">
+            <div className="ml-auto flex flex-col items-end gap-2">
               <EncounterControls />
               <ObjectInspector />
             </div>
           </div>
-          <div className="flex items-end gap-3">
+          <div ref={bottomRowRef} className="flex items-end gap-3">
             <div className="hidden md:block">
               <LayerControls />
             </div>
@@ -115,8 +144,29 @@ export default function App() {
           </div>
         )}
       </div>
-      <div className="h-[45vh] w-full lg:h-full lg:w-[400px] lg:shrink-0">
-        <MissionPanel />
+      <div className={missionPanelOpen ? 'relative flex h-[45vh] w-full flex-col lg:h-full lg:w-[400px] lg:shrink-0' : 'relative h-7 w-full lg:h-full lg:w-7 lg:shrink-0'}>
+        {/* Collapse handle: a bar above the panel on small screens, a tab on its left edge on wide ones. */}
+        <button
+          type="button"
+          onClick={toggleMissionPanel}
+          aria-expanded={missionPanelOpen}
+          aria-controls="mission-panel"
+          aria-label={missionPanelOpen ? 'Hide the mission panel' : 'Show the mission panel'}
+          title={missionPanelOpen ? 'Hide the mission panel' : 'Show the mission panel'}
+          className={`z-20 flex shrink-0 items-center justify-center gap-1.5 border-line bg-panel text-[10px] uppercase tracking-[0.18em] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-primary ${
+            missionPanelOpen
+              ? 'relative h-7 w-full border-b lg:absolute lg:left-0 lg:top-1/2 lg:h-16 lg:w-6 lg:-translate-x-full lg:-translate-y-1/2 lg:flex-col lg:rounded-l lg:border lg:border-r-0'
+              : 'h-full w-full border-b lg:flex-col lg:border-b-0 lg:border-l'
+          }`}
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" className={`h-3.5 w-3.5 ${missionPanelOpen ? 'rotate-90 lg:rotate-0' : '-rotate-90 lg:rotate-180'}`}>
+            <path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className={missionPanelOpen ? 'lg:sr-only' : 'lg:[writing-mode:vertical-rl]'}>{missionPanelOpen ? 'Hide panel' : 'Mission panel'}</span>
+        </button>
+        <div id="mission-panel" className={missionPanelOpen ? 'min-h-0 flex-1' : 'hidden'}>
+          <MissionPanel />
+        </div>
       </div>
 
       {backendStatus === 'offline' && (
