@@ -140,7 +140,22 @@ function Skeleton() {
 function ModelNow() {
   const live = useExplorerStore((s) => s.modelLive);
   const modelIndex = useExplorerStore((s) => s.modelIndex);
+  const hidden = useExplorerStore((s) => s.modelIndex !== null && s.mask.length > 0 && s.mask[s.modelIndex] === 0);
   const focus = useExplorerStore((s) => s.focus);
+  const resetFilters = useExplorerStore((s) => s.resetFilters);
+  // Live positions come from the globe's worker: nothing to show without the catalog or the globe.
+  const unavailable = useExplorerStore((s) => s.status === 'error' || s.sceneError !== null);
+  if (unavailable) return null;
+  if (hidden) {
+    return (
+      <p className="mt-2 text-x-14 text-x-muted">
+        GPM is hidden by the current filters.{' '}
+        <button type="button" className="x-link" onClick={resetFilters}>
+          Show everything
+        </button>
+      </p>
+    );
+  }
   if (!live) return <span className="x-skeleton mt-2 block h-4 w-full max-w-[320px]" aria-hidden="true" />;
   const lat = `${Math.abs(live.latDeg).toFixed(0)}°${live.latDeg < 0 ? 'S' : 'N'}`;
   const lon = `${Math.abs(live.lonDeg).toFixed(0)}°${live.lonDeg < 0 ? 'W' : 'E'}`;
@@ -212,7 +227,7 @@ export default function Approaches() {
         {(state.status === 'loading' || state.status === 'computing') && (
           <>
             <p className="mb-3 text-x-14 text-x-muted" role="status">
-              Screening GPM against {total ? nf.format(total) : 'every'} catalog objects…
+              {total ? `Screening GPM against ${nf.format(total)} catalog objects…` : 'Screening GPM against the catalog…'}
             </p>
             <Skeleton />
           </>

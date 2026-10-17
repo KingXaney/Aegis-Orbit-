@@ -67,6 +67,8 @@ export interface ExplorerState {
   /** Set when a selection should also turn the camera toward the object (search results). */
   focusRequest: { index: number; nonce: number } | null;
   sceneError: string | null;
+  /** True once the worker has posted its first propagated state for the loaded catalog. */
+  propagated: boolean;
   approaches: ApproachesState;
   /** The approach drawn on the globe is the pinned one (clicked), else the previewed one (hovered or focused). */
   pinnedApproach: string | null;
@@ -89,6 +91,7 @@ export interface ExplorerState {
   setLive: (live: LiveState | null) => void;
   setModelLive: (live: ModelLive | null) => void;
   setSceneError: (msg: string) => void;
+  setPropagated: (propagated: boolean) => void;
 }
 
 /** The approach drawn on the globe: the pinned one, else the previewed one. */
@@ -126,12 +129,13 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     modelLive: null,
     focusRequest: null,
     sceneError: null,
+    propagated: false,
     approaches: { status: 'loading', data: null, error: null },
     pinnedApproach: null,
     previewApproach: null,
 
     load: async () => {
-      set({ status: 'loading', error: null });
+      set({ status: 'loading', error: null, propagated: false });
       try {
         const { objects, ...meta } = await api.catalog();
         const model = objects.findIndex((o) => o.norad_id === MODEL_NORAD_ID);
@@ -202,5 +206,6 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     setLive: (live) => set({ live }),
     setModelLive: (modelLive) => set({ modelLive }),
     setSceneError: (sceneError) => set({ sceneError }),
+    setPropagated: (propagated) => set({ propagated }),
   };
 });

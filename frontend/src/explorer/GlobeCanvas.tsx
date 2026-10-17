@@ -44,6 +44,8 @@ export default function GlobeCanvas() {
       if (import.meta.env.DEV) (window as unknown as { __explorer?: ExplorerScene }).__explorer = sceneRef.current;
     } catch (err) {
       console.error('Cesium failed to initialise', err);
+      // Cesium leaves its own error panel in the container; the page explains the failure itself.
+      containerRef.current.replaceChildren();
       useExplorerStore.getState().setSceneError((err as Error).message);
     }
     return () => {
@@ -65,6 +67,7 @@ export default function GlobeCanvas() {
       if (msg.type === 'state') {
         scene.setState(msg.buffer, msg.unix);
         const store = useExplorerStore.getState();
+        if (!store.propagated) store.setPropagated(true);
         if (msg.failed !== lastFailed) {
           lastFailed = msg.failed;
           const failed = new Uint8Array(objects.length);

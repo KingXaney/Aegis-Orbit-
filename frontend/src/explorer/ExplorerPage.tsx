@@ -8,6 +8,7 @@ import Approaches from './Approaches';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
 import FindBox from './FindBox';
+import GlobeBoundary from './GlobeBoundary';
 import { OBJECT_TYPES, activeFilterCount } from './filters';
 import { FiltersIcon } from './icons';
 import { TYPE_INK } from './palette';
@@ -75,6 +76,7 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
   const open = useExplorerStore((s) => s.panelOpen);
   const setOpen = useExplorerStore((s) => s.setPanelOpen);
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
+  const ready = useExplorerStore((s) => s.status === 'ready');
   return (
     <button
       ref={buttonRef}
@@ -83,7 +85,8 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
       aria-controls="filter-panel"
       aria-label={active ? `Filters, ${active} applied` : 'Filters'}
       onClick={() => setOpen(!open)}
-      className="x-button shrink-0"
+      disabled={!ready}
+      className="x-button shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <FiltersIcon />
       Filters
@@ -94,6 +97,7 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
 
 /** What the globe shows, by type. Doubles as its colour key. */
 function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButtonElement | null> }) {
+  const ready = useExplorerStore((s) => s.status === 'ready');
   const byType = useExplorerStore((s) => s.visibleByType);
   const visible = useExplorerStore((s) => s.visible);
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
@@ -114,12 +118,14 @@ function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButt
           <li key={t} className="flex min-h-8 items-center gap-3">
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
             <span className="flex-1 text-x-14">{TYPE_PLURAL[t]}</span>
-            <span className="text-x-14">{nf.format(byType[t])}</span>
+            {ready ? <span className="text-x-14">{nf.format(byType[t])}</span> : <span className="x-skeleton h-3 w-14" aria-hidden="true" />}
           </li>
         ))}
       </ul>
       <p className="mt-2 text-x-14 text-x-muted" aria-live="polite">
-        {active > 0 ? (
+        {!ready ? (
+          'Fetching orbital elements…'
+        ) : active > 0 ? (
           <>
             {nf.format(visible)} shown with filters.{' '}
             <button type="button" onClick={resetFilters} className="x-link">
@@ -131,6 +137,43 @@ function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButt
         )}
       </p>
     </section>
+  );
+}
+
+/** What the globe is doing while it has nothing (or nothing matching) to show. */
+function GlobeStatus() {
+  const status = useExplorerStore((s) => s.status);
+  const propagated = useExplorerStore((s) => s.propagated);
+  const sceneError = useExplorerStore((s) => s.sceneError);
+  const total = useExplorerStore((s) => s.objects.length);
+  const visible = useExplorerStore((s) => s.visible);
+  const resetFilters = useExplorerStore((s) => s.resetFilters);
+  let body: React.ReactNode = null;
+  if (sceneError) {
+    body = 'The 3D globe needs WebGL, which this browser can’t provide right now. Everything beside it still works.';
+  } else if (status === 'loading') {
+    body = 'Fetching orbital elements…';
+  } else if (status === 'error') {
+    body = 'The catalog didn’t load, so there is nothing to show yet.';
+  } else if (!propagated) {
+    body = `Propagating ${nf.format(total)} objects with SGP4…`;
+  } else if (visible === 0) {
+    body = (
+      <>
+        No objects match these filters.{' '}
+        <button type="button" onClick={resetFilters} className="x-link pointer-events-auto">
+          Reset filters
+        </button>
+      </>
+    );
+  }
+  if (!body) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+      <p className="x-fade-in max-w-[320px] rounded-[8px] bg-x-bg px-3 py-2 text-center text-x-14 text-x-muted" role={sceneError ? 'alert' : 'status'}>
+        {body}
+      </p>
+    </div>
   );
 }
 
@@ -192,25 +235,18 @@ export default function ExplorerPage() {
       </header>
 
       <section inert={panelOpen} id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
-        <Suspense fallback={null}>
-          <GlobeCanvas />
-        </Suspense>
+        <GlobeBoundary>
+          <Suspense fallback={null}>
+            <GlobeCanvas />
+          </Suspense>
+        </GlobeBoundary>
         <UtcClock />
-        {status === 'ready' && <GlobeKey />}
-        {sceneError && (
-          <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-x-14 text-x-muted" role="alert">
-            The 3D globe couldn’t start because WebGL isn’t available in this browser ({sceneError}). Everything else on the page still works.
-          </p>
-        )}
+        {status === 'ready' && !sceneError && <GlobeKey />}
+        <GlobeStatus />
         {status === 'ready' && <DetailsCard />}
       </section>
 
       <div inert={panelOpen} className="flex flex-col gap-8 px-4 py-8 [grid-area:body] md:px-6 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
-        {status === 'loading' && (
-          <p className="text-x-14 text-x-muted" role="status">
-            Loading the orbital catalog…
-          </p>
-        )}
         {status === 'error' && (
           <div className="x-panel p-4" role="alert">
             <h2 className="text-x-16 font-bold">Can’t load the catalog from {API_BASE}</h2>
@@ -223,12 +259,8 @@ export default function ExplorerPage() {
             </button>
           </div>
         )}
-        {status === 'ready' && (
-          <>
-            <Approaches />
-            <CatalogKey filtersButton={filtersButton} />
-          </>
-        )}
+        <Approaches />
+        {status !== 'error' && <CatalogKey filtersButton={filtersButton} />}
         <DataCredit />
       </div>
 
