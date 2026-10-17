@@ -19,17 +19,6 @@
   --color-accent: #a5b4fc;
   --font-sans: 'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace;
-
-  /* Catalog explorer (home page) */
-  --color-x-void: #03060c;
-  --color-x-hull: #0a1220;
-  --color-x-graticule: #1a2640;
-  --color-x-readout: #e2eaf5;
-  --color-x-muted: #8696b2;
-  --color-x-payload: #5ce1f0;
-  --color-x-debris: #ff6b3d;
-  --color-x-rocket: #f4c542;
-  --font-b612: 'B612', 'Segoe UI', system-ui, sans-serif;
 }
 
 html,
@@ -107,102 +96,258 @@ input[type='range'].scrubber:focus-visible {
   .pulse { animation: none; }
 }
 
-/* ------------------------------------------------------------ catalog explorer */
+/* ------------------------------------------------------------ catalog explorer (home page)
+   A flight-deck palette: graphite neutrals, cockpit display inks for the three object types (cyan for
+   satellites, amber "caution" for debris, white for spent rocket bodies) and one accent, magenta, the
+   colour of the active route on a navigation display. Magenta is reserved for GPM, the spacecraft the
+   simulator flies, and for the primary action. Dark only for now: a light set would redefine these
+   variables under [data-theme='light']. The globe reads the same variables (see explorer/palette.ts). */
 
-.explorer {
-  font-size: 14px;
-  font-feature-settings: 'tnum' 1;
+html.x-root,
+html.x-root body,
+html.x-root #root {
+  font-size: 16px;
+  background: var(--x-bg);
+  -webkit-tap-highlight-color: transparent;
 }
-/* Text that floats directly over the globe stays legible against the dense object field. */
-.x-over-globe {
-  text-shadow: 0 1px 2px rgb(3 6 12 / 0.9), 0 0 18px rgb(3 6 12 / 0.85);
+
+:root {
+  --x-bg: #0b0d10;
+  --x-surface: #14171c;
+  --x-raised: #1c2027;
+  --x-divider: #2a3038;
+  --x-control: #646d7b; /* outlines of controls: at least 3:1 on every surface */
+  --x-text: #e8eaed;
+  --x-muted: #9aa3af;
+  --x-accent: #ff5fd2;
+  --x-accent-hover: #ff85de;
+  --x-warning: #ff4d4d; /* critical passes: red is the cockpit warning colour, amber (debris) the caution one */
+  --x-payload: #4fd8eb;
+  --x-debris: #ffb020;
+  --x-rocket: #d9dde3;
+  --x-ocean: #0f1319;
+  --x-land: #333f52;
+  --x-coast: #56647a;
+  --x-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.x-panel {
-  background: color-mix(in srgb, var(--color-x-hull) 80%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-x-readout) 7%, transparent);
-  border-radius: 14px;
-  backdrop-filter: blur(14px) saturate(1.2);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+
+@theme inline {
+  --color-x-bg: var(--x-bg);
+  --color-x-surface: var(--x-surface);
+  --color-x-raised: var(--x-raised);
+  --color-x-divider: var(--x-divider);
+  --color-x-control: var(--x-control);
+  --color-x-text: var(--x-text);
+  --color-x-muted: var(--x-muted);
+  --color-x-accent: var(--x-accent);
+  --color-x-warning: var(--x-warning);
+  --color-x-payload: var(--x-payload);
+  --color-x-debris: var(--x-debris);
+  --color-x-rocket: var(--x-rocket);
+
+  --font-x-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-x-body: 'B612', 'Segoe UI', system-ui, sans-serif;
+  --font-x-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+
+  /* The classic typographic scale, 12 to 48. */
+  --text-x-12: 12px;
+  --text-x-12--line-height: 16px;
+  --text-x-14: 14px;
+  --text-x-14--line-height: 20px;
+  --text-x-16: 16px;
+  --text-x-16--line-height: 24px;
+  --text-x-21: 21px;
+  --text-x-21--line-height: 28px;
+  --text-x-28: 28px;
+  --text-x-28--line-height: 32px;
+  --text-x-36: 36px;
+  --text-x-36--line-height: 40px;
+  --text-x-48: 48px;
+  --text-x-48--line-height: 48px;
 }
-.x-field {
-  border-radius: 8px;
-  border: 1px solid var(--color-x-graticule);
-  background: color-mix(in srgb, var(--color-x-void) 70%, transparent);
-  padding: 7px 10px;
-  font-size: 13px;
-  color: var(--color-x-readout);
+
+/* Component classes sit in the components layer so Tailwind utilities on an element can override them. */
+@layer components {
+  .explorer {
+    font-size: 16px;
+    line-height: 24px;
+    font-variant-numeric: tabular-nums;
+    color-scheme: dark;
+  }
+  .explorer h1,
+  .explorer h2,
+  .explorer h3 {
+    text-wrap: balance;
+  }
+  .explorer p {
+    text-wrap: pretty;
+  }
+  .explorer ::selection {
+    background: var(--x-accent);
+    color: var(--x-bg);
+  }
+  .explorer button,
+  .explorer a {
+    touch-action: manipulation;
+  }
+  .x-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--x-control) transparent;
+  }
+  .x-mono {
+    font-family: var(--font-x-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .x-display {
+    font-family: var(--font-x-display);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  /* Surfaces. Solid, never frosted. Only the floating sheets carry a shadow. */
+  .x-panel {
+    background: var(--x-surface);
+    border: 1px solid var(--x-divider);
+    border-radius: 12px;
+  }
+  .x-floating {
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 0.04) inset,
+      0 2px 4px rgb(0 0 0 / 0.35),
+      0 16px 40px -12px rgb(0 0 0 / 0.7);
+  }
+
+  /* Controls: 40px minimum targets, 8px radius, specific transitions only. */
+  .x-field {
+    min-height: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--x-control);
+    background: var(--x-bg);
+    padding: 8px 12px;
+    font-size: 16px; /* 16px keeps iOS from zooming on focus */
+    line-height: 22px;
+    color: var(--x-text);
+    transition: border-color 160ms var(--x-ease);
+  }
+  .x-field::placeholder {
+    color: var(--x-muted);
+  }
+  .x-field:hover {
+    border-color: var(--x-muted);
+  }
+  .x-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    min-width: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--x-control);
+    background: var(--x-surface);
+    padding: 0 12px;
+    font-size: 14px;
+    color: var(--x-text);
+    transition:
+      background-color 160ms var(--x-ease),
+      border-color 160ms var(--x-ease),
+      transform 160ms var(--x-ease);
+  }
+  .x-button:hover {
+    background: var(--x-raised);
+    border-color: var(--x-muted);
+  }
+  .x-button:active,
+  .x-press:active {
+    transform: scale(0.97);
+  }
+  .x-button-primary {
+    border-color: var(--x-accent);
+    background: var(--x-accent);
+    color: var(--x-bg);
+    font-weight: 700;
+    padding: 0 16px;
+  }
+  .x-button-primary:hover {
+    border-color: var(--x-accent-hover);
+    background: var(--x-accent-hover);
+  }
+  .x-link {
+    position: relative;
+    border-radius: 4px;
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--x-accent) 60%, transparent);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 160ms var(--x-ease);
+  }
+  .x-link:hover {
+    text-decoration-color: var(--x-accent);
+  }
+  /* Extends a small text control's hit area to 40px tall without moving anything. */
+  .x-link::after {
+    content: '';
+    position: absolute;
+    inset: -12px -4px;
+  }
+  .x-row {
+    /* Contains its visually hidden input, so focusing it never scrolls the page. */
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    border-radius: 8px;
+    padding: 0 8px;
+    cursor: pointer;
+    transition: background-color 160ms var(--x-ease);
+  }
+  .x-row:hover {
+    background: var(--x-raised);
+  }
+  .x-field:focus-visible,
+  .x-button:focus-visible,
+  .x-link:focus-visible,
+  .x-focus:focus-visible,
+  .x-row:has(input:focus-visible) {
+    outline: 2px solid var(--x-accent);
+    outline-offset: 2px;
+  }
 }
-.x-field::placeholder {
-  color: var(--color-x-muted);
+
+/* Loading placeholders hold the exact size of what replaces them, so nothing shifts. */
+.x-skeleton {
+  border-radius: 4px;
+  background: var(--x-raised);
+  animation: x-breathe 1.6s ease-in-out infinite;
 }
-.x-row {
-  /* Contains its visually hidden input, so focusing it never scrolls the page. */
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-radius: 8px;
-  padding: 5px 8px;
-  font-size: 14px;
-  cursor: pointer;
+@keyframes x-breathe {
+  50% { opacity: 0.5; }
 }
-.x-row:hover {
-  background: rgb(255 255 255 / 0.04);
-}
-.x-button {
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-x-readout) 14%, transparent);
-  background: color-mix(in srgb, var(--color-x-hull) 70%, transparent);
-  padding: 5px 11px;
-  font-size: 12px;
-  color: var(--color-x-readout);
-  transition: border-color 120ms;
-  backdrop-filter: blur(10px);
-}
-.x-button:hover {
-  border-color: color-mix(in srgb, var(--color-x-readout) 35%, transparent);
-}
-.x-field:focus-visible,
-.x-button:focus-visible,
-.x-focus:focus-visible,
-.x-row:has(input:focus-visible) {
-  outline: 2px solid var(--color-x-payload);
-  outline-offset: 1px;
-}
-.x-button-primary {
-  background: var(--color-x-readout);
-  border-color: var(--color-x-readout);
-  color: var(--color-x-void);
-  font-weight: 700;
-  padding: 7px 14px;
-  font-size: 14px;
-}
-.x-button-primary:hover {
-  background: #fff;
-}
+
 @keyframes x-sheet-in {
   from { opacity: 0; transform: translateX(16px); }
-  to { opacity: 1; transform: none; }
 }
 .x-sheet-in {
-  animation: x-sheet-in 200ms ease-out;
+  animation: x-sheet-in 220ms var(--x-ease);
 }
-@keyframes x-live {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-x-payload) 60%, transparent); }
-  50% { box-shadow: 0 0 0 4px transparent; }
+@keyframes x-fade-in {
+  from { opacity: 0; }
 }
-.x-live-dot {
-  animation: x-live 2s ease-in-out infinite;
+.x-fade-in {
+  animation: x-fade-in 200ms var(--x-ease);
 }
 @keyframes x-card-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateY(8px); }
 }
 .x-card-in {
-  animation: x-card-in 180ms ease-out;
+  animation: x-card-in 200ms var(--x-ease);
 }
 @media (prefers-reduced-motion: reduce) {
+  .x-skeleton,
+  .x-fade-in,
   .x-card-in,
-  .x-sheet-in,
-  .x-live-dot { animation: none; }
+  .x-sheet-in { animation: none; }
+  .x-button:active,
+  .x-press:active { transform: none; }
 }

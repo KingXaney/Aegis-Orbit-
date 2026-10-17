@@ -9,15 +9,8 @@ export const TYPE_LABEL: Record<CatalogObjectType, string> = {
   ROCKET_BODY: 'Rocket body',
 };
 
-export const TYPE_COLOR: Record<CatalogObjectType, string> = {
-  PAYLOAD: '#5ce1f0',
-  DEBRIS: '#ff6b3d',
-  ROCKET_BODY: '#f4c542',
-};
-
-/** GPM-CORE: the satellite Aegis Orbit uses as its model spacecraft, marked with a pulsing green dot. */
+/** GPM-CORE: the satellite Aegis Orbit uses as its model spacecraft, marked in magenta on the globe. */
 export const MODEL_NORAD_ID = 39574;
-export const MODEL_COLOR = '#45f08c';
 
 export const ORBIT_CLASS_LABEL: Record<OrbitClass, string> = {
   LEO: 'Low Earth orbit',

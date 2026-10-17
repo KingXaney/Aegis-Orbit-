@@ -1,8 +1,10 @@
 import * as Cesium from 'cesium';
 import type { CatalogObject, CatalogObjectType, OrbitClass } from '../types/api';
-import { EARTH_COLORS, buildEarthTexture } from './earthTexture';
-import { MODEL_COLOR, MODEL_NORAD_ID, TYPE_COLOR } from './filters';
-import { STRIDE, gmst } from './propagation';
+import { buildEarthTexture } from './earthTexture';
+import { MODEL_NORAD_ID } from './filters';
+import { readPalette, type Palette } from './palette';
+import type { OrbitPath } from './propagator.worker';
+import { STRIDE, gmst, temeToFixed } from './propagation';
 
 // Catalog globe. Every object is a point primitive positioned in TEME (metres); the point, polyline,
 // marker and label collections share one model matrix, a rotation about Z by -GMST(now), so the whole
@@ -13,21 +15,15 @@ export interface ExplorerSceneCallbacks {
   onPick: (index: number | null) => void;
 }
 
-const COLORS: Record<CatalogObjectType, Cesium.Color> = {
-  PAYLOAD: Cesium.Color.fromCssColorString(TYPE_COLOR.PAYLOAD),
-  DEBRIS: Cesium.Color.fromCssColorString(TYPE_COLOR.DEBRIS),
-  ROCKET_BODY: Cesium.Color.fromCssColorString(TYPE_COLOR.ROCKET_BODY),
-};
-// Solid, anti-aliased dots (pixels). Debris is the most numerous, so it is the smallest and slightly
-// translucent, which keeps dense shells from merging into a smear.
-const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 4, DEBRIS: 3, ROCKET_BODY: 3.5 };
-const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 1, DEBRIS: 0.85, ROCKET_BODY: 0.95 };
+// Solid, anti-aliased dots (pixels), small and slightly translucent so the dense shells (Starlink's
+// above all) don't merge into a smear and GPM's larger magenta dot stays the thing the eye finds.
+const SIZE: Record<CatalogObjectType, number> = { PAYLOAD: 3, DEBRIS: 2.5, ROCKET_BODY: 3 };
+const ALPHA: Record<CatalogObjectType, number> = { PAYLOAD: 0.85, DEBRIS: 0.75, ROCKET_BODY: 0.9 };
 const SELECTED_SIZE = 8;
-// The model spacecraft: a green dot larger than the rest, a soft steady halo so it can be found at a
+// The model spacecraft: a magenta dot larger than the rest, a soft steady halo so it can be found at a
 // glance, and two staggered ripples that grow and fade so one is always on screen.
-const MODEL = Cesium.Color.fromCssColorString(MODEL_COLOR);
-const MODEL_SIZE = 6;
-const HALO_SIZE = 14;
+const MODEL_SIZE = 7;
+const HALO_SIZE = 16;
 const PULSE_PERIOD_S = 2;
 const PULSE_START_PX = 6;
 const PULSE_END_PX = 34;
@@ -37,28 +33,85 @@ const IDLE_BEFORE_ROTATE_S = 10;
 const INTRO_DELAY_S: Record<OrbitClass, number> = { LEO: 0, MEO: 0.35, HEO: 0.5, GEO: 0.7 };
 const INTRO_GEO_SWEEP_S = 0.6;
 const INTRO_FADE_S = 0.5;
+// The opening view: Earth spans this share of the frame's shorter side, so LEO (where GPM flies) reads
+// clearly and the sparser MEO and GEO objects sit around it.
+const EARTH_FILL = 0.62;
+const EARTH_RADIUS_M = Cesium.Ellipsoid.WGS84.maximumRadius;
+const MAX_OPENING_LAT_DEG = 35;
+// Camera height above the closest-approach point when an approach is opened: both orbits and the
+// crossing stay in view.
+const APPROACH_VIEW_HEIGHT_M = 9e6;
 
-function ringSprite(): HTMLCanvasElement {
+/** An approach drawn on the globe: the other object and where GPM will be at closest approach (TEME, km). */
+export interface SceneApproach {
+  index: number;
+  tcaTemeKm: [number, number, number];
+  label: string;
+}
+
+function toCartesians(points: Float32Array): Cesium.Cartesian3[] {
+  const out: Cesium.Cartesian3[] = [];
+  for (let k = 0; k < points.length; k += 3) out.push(new Cesium.Cartesian3(points[k] * 1000, points[k + 1] * 1000, points[k + 2] * 1000));
+  return out;
+}
+
+/** Ease-out cubic, for lines that draw themselves in. */
+function easeOut(x: number): number {
+  return 1 - (1 - x) ** 3;
+}
+
+function ringSprite(radii: number[] = [15]): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = 48;
   const g = c.getContext('2d')!;
   g.strokeStyle = 'rgba(255,255,255,0.95)';
   g.lineWidth = 2;
-  g.beginPath();
-  g.arc(24, 24, 15, 0, Math.PI * 2);
-  g.stroke();
+  for (const r of radii) {
+    g.beginPath();
+    g.arc(24, 24, r, 0, Math.PI * 2);
+    g.stroke();
+  }
   return c;
+}
+
+// Objects GPM's screening detected: a thin ring in the object's ink; critical ones (inside the
+// simulator's distance target) a red double ring and a label, so the warning is never colour alone.
+const DETECTED_RING_PX = 16;
+const CRITICAL_RING_PX = 26;
+const UNDETECTED_ALPHA = 0.3;
+
+/** What GPM's screening detected: the objects (one entry each) and every pass on GPM's orbit. */
+export interface SceneDetections {
+  objects: { index: number; critical: boolean; label: string }[];
+  encounters: { tcaTemeKm: [number, number, number]; critical: boolean }[];
 }
 
 export class ExplorerScene {
   readonly viewer: Cesium.Viewer;
   private readonly callbacks: ExplorerSceneCallbacks;
+  private readonly palette: Palette;
+  private readonly colors: Record<CatalogObjectType, Cesium.Color>;
+  private readonly model: Cesium.Color;
   private readonly points: Cesium.PointPrimitiveCollection;
   private readonly pulse: Cesium.PointPrimitiveCollection;
   private readonly pulseHalo: Cesium.PointPrimitive;
   private readonly pulseRings: Cesium.PointPrimitive[];
   private readonly markers: Cesium.BillboardCollection;
   private readonly paths: Cesium.PolylineCollection;
+  private readonly routes: Cesium.PolylineCollection;
+  private readonly tcaMarker: Cesium.Billboard;
+  private readonly approachRing: Cesium.Billboard;
+  private readonly approachLabel: Cesium.Label;
+  private readonly tcaLabel: Cesium.Label;
+  private readonly detectionMarks: Cesium.BillboardCollection;
+  private readonly encounters: Cesium.PointPrimitiveCollection;
+  private readonly warning: Cesium.Color;
+  private readonly labelOptions: Cesium.Label.ConstructorOptions;
+  private readonly ringImage = ringSprite();
+  private readonly criticalRingImage = ringSprite([15, 21]);
+  private detections: { index: number; ring: Cesium.Billboard; label: Cesium.Label | null }[] = [];
+  private detected = new Set<number>();
+  private dimUndetected = false;
   private readonly labels: Cesium.LabelCollection;
   private readonly ring: Cesium.Billboard;
   private readonly hoverLabel: Cesium.Label;
@@ -77,6 +130,12 @@ export class ExplorerScene {
   private mask: Uint8Array = new Uint8Array(0);
   private selected: number | null = null;
   private hovered: number | null = null;
+  private approach: SceneApproach | null = null;
+  /** A focus asked for before the first state arrived (a shared ?object= link). */
+  private pendingFocus: number | null = null;
+  private routeLines: { line: Cesium.Polyline; positions: Cesium.Cartesian3[] }[] = [];
+  private revealStart: number | null = null;
+  private revealDuration = 0;
   private introStart: number | null = null;
   private introDelay: Float32Array = new Float32Array(0);
   private lastInteraction = -Infinity;
@@ -95,6 +154,11 @@ export class ExplorerScene {
 
   constructor(container: HTMLElement, callbacks: ExplorerSceneCallbacks) {
     this.callbacks = callbacks;
+    this.palette = readPalette();
+    const css = (c: string) => Cesium.Color.fromCssColorString(c);
+    this.colors = { PAYLOAD: css(this.palette.types.PAYLOAD), DEBRIS: css(this.palette.types.DEBRIS), ROCKET_BODY: css(this.palette.types.ROCKET_BODY) };
+    this.model = css(this.palette.accent);
+    this.warning = css(this.palette.warning);
     this.reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
     this.viewer = new Cesium.Viewer(container, {
@@ -124,9 +188,9 @@ export class ExplorerScene {
     // Evenly lit, no day/night shading: the globe is a backdrop for the objects.
     scene.globe.enableLighting = false;
     scene.globe.showGroundAtmosphere = false;
-    scene.globe.baseColor = Cesium.Color.fromCssColorString(EARTH_COLORS.ocean);
+    scene.globe.baseColor = Cesium.Color.fromCssColorString(this.palette.ocean);
     scene.postProcessStages.fxaa.enabled = false;
-    scene.backgroundColor = Cesium.Color.fromCssColorString('#03060c');
+    scene.backgroundColor = Cesium.Color.fromCssColorString(this.palette.bg);
     if (scene.sun) scene.sun.show = false;
     if (scene.moon) scene.moon.show = false;
     scene.fog.enabled = false;
@@ -136,30 +200,38 @@ export class ExplorerScene {
 
     // Added first so the ring draws beneath the dots.
     this.pulse = scene.primitives.add(new Cesium.PointPrimitiveCollection());
-    this.pulseHalo = this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: HALO_SIZE, color: MODEL.withAlpha(0.28), show: false });
+    this.pulseHalo = this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: HALO_SIZE, color: this.model.withAlpha(0.28), show: false });
     this.pulseRings = [0, 1].map(() =>
-      this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: PULSE_START_PX, color: Cesium.Color.TRANSPARENT, outlineColor: MODEL, outlineWidth: 2, show: false }),
+      this.pulse.add({ position: new Cesium.Cartesian3(), pixelSize: PULSE_START_PX, color: Cesium.Color.TRANSPARENT, outlineColor: this.model, outlineWidth: 2, show: false }),
     );
     this.points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
     this.paths = scene.primitives.add(new Cesium.PolylineCollection());
+    this.routes = scene.primitives.add(new Cesium.PolylineCollection());
+    this.encounters = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    this.detectionMarks = scene.primitives.add(new Cesium.BillboardCollection({ scene }));
     this.markers = scene.primitives.add(new Cesium.BillboardCollection({ scene }));
     this.labels = scene.primitives.add(new Cesium.LabelCollection({ scene }));
     this.ring = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), width: 30, height: 30, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
     const labelOptions = {
       position: new Cesium.Cartesian3(),
-      font: '13px B612, sans-serif',
-      fillColor: Cesium.Color.fromCssColorString('#e2eaf5'),
+      font: '14px B612, sans-serif',
+      fillColor: Cesium.Color.fromCssColorString(this.palette.text),
       showBackground: true,
-      backgroundColor: Cesium.Color.fromCssColorString('#0a1220').withAlpha(0.8),
-      backgroundPadding: new Cesium.Cartesian2(7, 4),
+      backgroundColor: Cesium.Color.fromCssColorString(this.palette.surface).withAlpha(0.92),
+      backgroundPadding: new Cesium.Cartesian2(8, 4),
       pixelOffset: new Cesium.Cartesian2(14, 0),
       horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
       verticalOrigin: Cesium.VerticalOrigin.CENTER,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       show: false,
     };
+    this.labelOptions = labelOptions;
     this.hoverLabel = this.labels.add(labelOptions);
     this.selectedLabel = this.labels.add(labelOptions);
+    this.approachLabel = this.labels.add(labelOptions);
+    this.tcaLabel = this.labels.add({ ...labelOptions, fillColor: this.model });
+    this.approachRing = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), width: 30, height: 30, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
+    this.tcaMarker = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), color: this.model, width: 24, height: 24, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
 
     this.removePreUpdate = scene.preUpdate.addEventListener(() => this.frame());
 
@@ -183,18 +255,42 @@ export class ExplorerScene {
       if (this.hovered !== null) this.hoverLabel.text = this.objects[this.hovered].name;
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-    // Far enough out that the GEO belt arcs across the frame around the Earth. In portrait the
-    // field of view is vertical, so start closer to keep the globe a similar width.
-    const aspect = container.clientWidth / Math.max(container.clientHeight, 1);
-    const altitude = 42_000_000 * Math.min(1, Math.max(0.75, aspect * 1.3));
-    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(-30, 18, altitude) });
+    // Until the first state arrives (when the view turns to GPM), look at the Atlantic.
+    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(-30, 18, this.openingRangeM() - EARTH_RADIUS_M) });
 
-    void this.addEarth(container.clientWidth < 768 ? 4096 : 8192);
+    // 8192 px only where the extra detail can show: high-density screens wider than a phone.
+    const sharp = container.clientWidth >= 768 && (window.devicePixelRatio || 1) > 1;
+    void this.addEarth(sharp ? 8192 : 4096);
+  }
+
+  /**
+   * Camera distance from Earth's centre that makes Earth span EARTH_FILL of the shorter side. Cesium's
+   * fov is the horizontal angle in landscape and the vertical one in portrait, so the half-angle across
+   * the shorter side is derived from it and the aspect ratio.
+   */
+  private openingRangeM(): number {
+    const canvas = this.viewer.scene.canvas;
+    const w = Math.max(canvas.clientWidth, 1);
+    const h = Math.max(canvas.clientHeight, 1);
+    const fov = (this.viewer.camera.frustum as Cesium.PerspectiveFrustum).fov ?? Cesium.Math.toRadians(60);
+    const shortHalf = Math.atan((Math.tan(fov / 2) * Math.min(w, h)) / Math.max(w, h));
+    return EARTH_RADIUS_M / Math.sin(Math.atan(EARTH_FILL * Math.tan(shortHalf)));
+  }
+
+  /** Turn the opening view over GPM, unless the person has already moved the camera. */
+  private viewOverModel(): void {
+    const i = this.modelIndex;
+    const s = this.state;
+    if (i === null || !s || this.lastInteraction > -Infinity || !Number.isFinite(s[i * STRIDE])) return;
+    const [x, y, z] = temeToFixed(s[i * STRIDE], s[i * STRIDE + 1], s[i * STRIDE + 2], gmst(this.stateUnix));
+    const lon = Math.atan2(y, x);
+    const lat = Cesium.Math.clamp(Math.atan2(z, Math.hypot(x, y)), -Cesium.Math.toRadians(MAX_OPENING_LAT_DEG), Cesium.Math.toRadians(MAX_OPENING_LAT_DEG));
+    this.viewer.camera.setView({ destination: Cesium.Cartesian3.fromRadians(lon, lat, this.openingRangeM() - EARTH_RADIUS_M) });
   }
 
   private async addEarth(width: number): Promise<void> {
     try {
-      const url = await buildEarthTexture(width);
+      const url = await buildEarthTexture(width, this.palette);
       if (this.destroyed) {
         URL.revokeObjectURL(url);
         return;
@@ -246,6 +342,13 @@ export class ExplorerScene {
     const first = this.state === null;
     this.state = buffer;
     this.stateUnix = unix;
+    if (first && this.pendingFocus !== null) {
+      const index = this.pendingFocus;
+      this.pendingFocus = null;
+      this.focus(index);
+    } else if (first) {
+      this.viewOverModel();
+    }
     if (first && !this.reducedMotion) this.startIntro();
   }
 
@@ -259,6 +362,7 @@ export class ExplorerScene {
     this.ring.show = index !== null && index !== this.modelIndex;
     this.selectedLabel.show = index !== null;
     if (index !== null) this.selectedLabel.text = this.objects[index].name;
+    this.approachLabel.show = this.approach !== null && this.approach.index !== index;
     this.hoverLabel.show = false;
     if (this.introStart === null) this.applyColors();
   }
@@ -280,12 +384,104 @@ export class ExplorerScene {
   }
 
   /**
+   * GPM's magenta line, plus the other object's orbit and the closest-approach marker while an approach
+   * is shown. New lines draw themselves in over `revealS` (instantly under reduced motion).
+   */
+  setRoute(paths: OrbitPath[], approach: SceneApproach | null, revealS: number): void {
+    this.routes.removeAll();
+    this.routeLines = [];
+    const reveal = this.reducedMotion ? 0 : revealS;
+    for (const { index, points } of paths) {
+      if (!this.objects[index] || points.length < 6) continue;
+      const positions = toCartesians(points);
+      const isModel = index === this.modelIndex;
+      const line = this.routes.add({
+        positions: reveal > 0 ? positions.slice(0, 2) : positions,
+        width: isModel ? 2 : 1.5,
+        material: Cesium.Material.fromType('Color', { color: this.baseColor(index).withAlpha(isModel ? 0.95 : 0.85) }),
+      });
+      this.routeLines.push({ line, positions });
+    }
+    this.revealStart = reveal > 0 ? performance.now() / 1000 : null;
+    this.revealDuration = reveal;
+
+    this.approach = approach;
+    const tca = approach ? new Cesium.Cartesian3(approach.tcaTemeKm[0] * 1000, approach.tcaTemeKm[1] * 1000, approach.tcaTemeKm[2] * 1000) : null;
+    this.tcaMarker.show = tca !== null;
+    this.tcaLabel.show = tca !== null;
+    this.approachRing.show = approach !== null;
+    this.approachLabel.show = approach !== null && approach.index !== this.selected;
+    if (approach && tca) {
+      this.tcaMarker.position = tca;
+      this.tcaLabel.position = tca;
+      this.tcaLabel.text = approach.label;
+      this.approachLabel.text = this.objects[approach.index]?.name ?? '';
+    }
+    if (this.introStart === null) this.applyColors();
+  }
+
+  /**
+   * Mark what GPM's screening detected. With `dimUndetected`, every other object steps back so the
+   * detections read as the population around GPM's orbit.
+   */
+  setDetections(d: SceneDetections, dimUndetected: boolean): void {
+    this.detectionMarks.removeAll();
+    this.encounters.removeAll();
+    for (const { label } of this.detections) if (label) this.labels.remove(label);
+    this.detections = [];
+    for (const { index, critical, label } of d.objects) {
+      if (!this.objects[index]) continue;
+      const ring = this.detectionMarks.add({
+        position: new Cesium.Cartesian3(),
+        image: critical ? this.criticalRingImage : this.ringImage,
+        color: critical ? this.warning : this.baseColor(index).withAlpha(0.7),
+        width: critical ? CRITICAL_RING_PX : DETECTED_RING_PX,
+        height: critical ? CRITICAL_RING_PX : DETECTED_RING_PX,
+        // Critical rings stay visible behind the Earth's limb; the rest are hidden by it.
+        disableDepthTestDistance: critical ? Number.POSITIVE_INFINITY : undefined,
+        show: false,
+      });
+      const tag = critical ? this.labels.add({ ...this.labelOptions, text: label, fillColor: this.warning, pixelOffset: new Cesium.Cartesian2(18, 0), show: true }) : null;
+      this.detections.push({ index, ring, label: tag });
+    }
+    for (const { tcaTemeKm, critical } of d.encounters) {
+      this.encounters.add({
+        position: new Cesium.Cartesian3(tcaTemeKm[0] * 1000, tcaTemeKm[1] * 1000, tcaTemeKm[2] * 1000),
+        pixelSize: critical ? 9 : 5,
+        color: critical ? this.warning : Cesium.Color.fromCssColorString(this.palette.text).withAlpha(0.6),
+        outlineColor: Cesium.Color.fromCssColorString(this.palette.bg),
+        outlineWidth: critical ? 2 : 0,
+        disableDepthTestDistance: critical ? Number.POSITIVE_INFINITY : undefined,
+      });
+    }
+    this.detected = new Set(this.detections.map((x) => x.index));
+    this.dimUndetected = dimUndetected;
+    if (this.introStart === null) this.applyColors();
+  }
+
+  /** Fly to look straight down on the shown approach's closest-approach point. */
+  focusApproach(): void {
+    const a = this.approach;
+    if (!a) return;
+    const dir = new Cesium.Cartesian3(a.tcaTemeKm[0], a.tcaTemeKm[1], a.tcaTemeKm[2]);
+    const radiusM = Cesium.Cartesian3.magnitude(dir) * 1000;
+    Cesium.Cartesian3.normalize(dir, dir);
+    Cesium.Matrix4.multiplyByPointAsVector(this.rotation, dir, dir);
+    this.viewer.camera.flyTo({ destination: Cesium.Cartesian3.multiplyByScalar(dir, radiusM + APPROACH_VIEW_HEIGHT_M, dir), duration: this.reducedMotion ? 0 : 1.4 });
+    this.onInteract();
+  }
+
+  /**
    * Fly to an object, looking from partway along its orbit normal so the orbit reads as an ellipse
    * rather than edge-on. Keeps the current distance unless that is too close to see the orbit.
    */
   focus(index: number): void {
     const s = this.state;
-    if (!s || !Number.isFinite(s[index * STRIDE])) return;
+    if (!s) {
+      this.pendingFocus = index;
+      return;
+    }
+    if (!Number.isFinite(s[index * STRIDE])) return;
     const o = index * STRIDE;
     const r = new Cesium.Cartesian3(s[o], s[o + 1], s[o + 2]);
     const h = Cesium.Cartesian3.cross(r, new Cesium.Cartesian3(s[o + 3], s[o + 4], s[o + 5]), new Cesium.Cartesian3());
@@ -324,13 +520,17 @@ export class ExplorerScene {
     Cesium.Matrix4.clone(this.rotation, this.points.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.pulse.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.paths.modelMatrix);
+    Cesium.Matrix4.clone(this.rotation, this.routes.modelMatrix);
+    Cesium.Matrix4.clone(this.rotation, this.encounters.modelMatrix);
+    Cesium.Matrix4.clone(this.rotation, this.detectionMarks.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.markers.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.labels.modelMatrix);
 
     const t = performance.now() / 1000;
     const frameDt = Math.min(t - this.lastFrame, 0.25);
     this.lastFrame = t;
-    if (!this.reducedMotion && this.selected === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
+    if (this.revealStart !== null) this.stepReveal(t - this.revealStart);
+    if (!this.reducedMotion && this.selected === null && this.approach === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
       this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -ROTATE_RAD_S * frameDt);
     }
 
@@ -345,16 +545,35 @@ export class ExplorerScene {
     }
     if (this.introStart !== null) this.stepIntro(t - this.introStart);
     this.stepPulse(t, dt);
-    for (const [label, index] of [[this.hoverLabel, this.hovered], [this.selectedLabel, this.selected]] as const) {
+    const approachIndex = this.approach?.index ?? null;
+    for (const [label, index] of [[this.hoverLabel, this.hovered], [this.selectedLabel, this.selected], [this.approachLabel, approachIndex]] as const) {
       if (index !== null && label.show && this.temePosition(index, dt, pos)) label.position = pos;
     }
     if (this.selected !== null && this.temePosition(this.selected, dt, pos)) this.ring.position = pos;
+    if (approachIndex !== null && this.temePosition(approachIndex, dt, pos)) this.approachRing.position = pos;
+    for (const { index, ring, label } of this.detections) {
+      const visible = this.mask[index] === 1 && this.temePosition(index, dt, pos) !== null;
+      if (ring.show !== visible) ring.show = visible;
+      if (label && label.show !== visible) label.show = visible;
+      if (!visible) continue;
+      ring.position = pos;
+      if (label) label.position = pos;
+    }
+  }
+
+  private stepReveal(elapsed: number): void {
+    const done = elapsed >= this.revealDuration;
+    const share = done ? 1 : easeOut(elapsed / this.revealDuration);
+    for (const { line, positions } of this.routeLines) {
+      line.positions = done ? positions : positions.slice(0, Math.max(2, Math.ceil(share * positions.length)));
+    }
+    if (done) this.revealStart = null;
   }
 
   // ------------------------------------------------------------------ colour
 
   private baseColor(i: number): Cesium.Color {
-    return i === this.modelIndex ? MODEL : COLORS[this.objects[i].type];
+    return i === this.modelIndex ? this.model : this.colors[this.objects[i].type];
   }
 
   private baseAlpha(i: number): number {
@@ -374,14 +593,14 @@ export class ExplorerScene {
     if (!visible) return;
     for (const p of parts) p.position = this.scratchPos;
     const dim = this.selected !== null && i !== this.selected ? DIMMED_ALPHA : 1;
-    this.pulseHalo.color = Cesium.Color.clone(MODEL, this.scratchColor).withAlpha(0.28 * dim, this.scratchColor);
+    this.pulseHalo.color = Cesium.Color.clone(this.model, this.scratchColor).withAlpha(0.28 * dim, this.scratchColor);
     this.pulseRings.forEach((ring, k) => {
       const phase = this.reducedMotion ? 0.35 + k * 0.3 : ((t / PULSE_PERIOD_S + k / this.pulseRings.length) % 1);
       ring.pixelSize = PULSE_START_PX + phase * (PULSE_END_PX - PULSE_START_PX);
       const a = (1 - phase) * dim;
       // Fresh colours: the getters return the primitive's own objects, and assigning those back is a no-op.
-      ring.outlineColor = MODEL.withAlpha(0.9 * a);
-      ring.color = MODEL.withAlpha(0.18 * a);
+      ring.outlineColor = this.model.withAlpha(0.9 * a);
+      ring.color = this.model.withAlpha(0.18 * a);
     });
   }
 
@@ -416,12 +635,19 @@ export class ExplorerScene {
 
   /** With an object selected, everything else steps back so it reads clearly. */
   private applyColors(): void {
-    const dim = this.selected !== null;
+    // With an object selected or an approach shown, everything else steps back; GPM never does.
+    const approachIndex = this.approach?.index ?? null;
+    const dim = this.selected !== null || approachIndex !== null;
     for (let i = 0; i < this.dots.length; i++) {
       const b = this.dots[i];
       const c = Cesium.Color.clone(this.baseColor(i), this.scratchColor);
-      const isSelected = i === this.selected;
-      c.alpha = dim && !isSelected ? DIMMED_ALPHA * this.baseAlpha(i) : this.baseAlpha(i);
+      const isSelected = i === this.selected || i === approachIndex;
+      let alpha = this.baseAlpha(i);
+      if (i !== this.modelIndex && !isSelected) {
+        if (dim) alpha *= DIMMED_ALPHA;
+        else if (this.dimUndetected && !this.detected.has(i)) alpha *= UNDETECTED_ALPHA;
+      }
+      c.alpha = alpha;
       b.color = c;
       b.pixelSize = isSelected ? SELECTED_SIZE : this.baseSize(i);
     }

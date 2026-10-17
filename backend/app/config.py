@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     screening_coarse_step_s: float = 30.0
     altitude_filter_margin_km: float = 50.0
     co_orbital_min_relative_speed_kms: float = 0.01  # below this the pair is treated as co-orbital, not a conjunction
+    explorer_prewarm: bool = True  # screen GPM against the explorer catalog at startup, for the home page
 
     # --- Risk thresholds (demo settings, not operational standards) -------
     pc_elevated_threshold: float = 1e-5
