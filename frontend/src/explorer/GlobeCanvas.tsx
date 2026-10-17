@@ -151,5 +151,6 @@ export default function GlobeCanvas() {
     worker.postMessage(msg);
   }, [objects, modelIndex, active, pinned, indexByNorad]);
 
-  return <div ref={containerRef} className="absolute inset-0" aria-label="3D globe of tracked objects in orbit" />;
+  // The enclosing section names the globe; the canvas itself is driven by mouse and by the rail.
+  return <div ref={containerRef} className="absolute inset-0" />;
 }
