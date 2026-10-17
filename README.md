@@ -56,8 +56,10 @@ npm install
 npm run dev          # copies Cesium's static assets to public/cesium and starts Vite on :5173
 ```
 
-Open <http://localhost:5173>. The backend URL defaults to `http://localhost:8000`
-(override with `VITE_API_BASE_URL` in `frontend/.env.local`).
+Open <http://localhost:5173> for the catalog explorer: every tracked object on orbit, propagated live
+with SGP4 in a browser worker, with type, orbit class and operator filters and a details card on click.
+The collision avoidance simulator is at <http://localhost:5173/mission>. The backend URL defaults to
+`http://localhost:8000` (override with `VITE_API_BASE_URL` in `frontend/.env.local`).
 
 ### 3. Environment variables
 
@@ -150,6 +152,8 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `GET /api/simulation/state` | Threat state, approvals, decisions |
 | `POST /api/simulation/approve`, `POST /api/simulation/reject` | Human decision on a simulated maneuver |
 | `POST /api/data/refresh` | Download fresh CelesTrak groups (network required) |
+| `GET /api/catalog` | Explorer catalog: every on-orbit object's TLE with SATCAT type, owner and launch date, plus orbit class |
+| `POST /api/catalog/refresh` | Rebuild the explorer catalog from CelesTrak (`GROUP=active`, `NAME=DEB`, `NAME=R/B`, SATCAT); at most once every 2 hours |
 
 ## Repository layout
 

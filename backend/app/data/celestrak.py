@@ -7,6 +7,7 @@ report where and when its elements were obtained.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,6 +17,7 @@ import httpx
 from ..config import get_settings
 
 CELESTRAK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
+CELESTRAK_SATCAT_URL = "https://celestrak.org/pub/satcat.csv"
 
 
 class DataUnavailable(RuntimeError):
@@ -27,19 +29,38 @@ def _cache_files(group: str) -> Tuple[Path, Path]:
     return base / f"celestrak_{group}.tle", base / f"celestrak_{group}.meta.json"
 
 
-def fetch_group_tle(group: str, timeout_s: float = 60.0) -> str:
+def _download(url: str, params: Optional[Dict[str, str]], what: str, timeout_s: float) -> str:
     settings = get_settings()
     if not settings.allow_network:
         raise DataUnavailable("network access is disabled (ALLOW_NETWORK=false)")
     try:
-        resp = httpx.get(CELESTRAK_GP_URL, params={"GROUP": group, "FORMAT": "tle"}, timeout=timeout_s,
-                         follow_redirects=True)
+        resp = httpx.get(url, params=params, timeout=timeout_s, follow_redirects=True)
+        if resp.status_code == 403 and "has not updated" in resp.text:
+            # CelesTrak refuses repeat downloads of the same query within its 2-hour update cycle.
+            raise DataUnavailable(f"CelesTrak throttled {what}: {' '.join(resp.text.split())}")
         resp.raise_for_status()
     except httpx.HTTPError as exc:
-        raise DataUnavailable(f"could not download CelesTrak group '{group}': {exc}") from exc
-    text = resp.text
+        raise DataUnavailable(f"could not download CelesTrak {what}: {exc}") from exc
+    return resp.text
+
+
+def fetch_gp(params: Dict[str, str], timeout_s: float = 60.0) -> str:
+    """Download GP element sets in TLE format for a gp.php query (GROUP=…, NAME=…)."""
+    what = "query " + "&".join(f"{k}={v}" for k, v in params.items())
+    text = _download(CELESTRAK_GP_URL, {**params, "FORMAT": "tle"}, what, timeout_s)
     if "1 " not in text:
-        raise DataUnavailable(f"CelesTrak response for group '{group}' contained no element sets")
+        raise DataUnavailable(f"CelesTrak response for {what} contained no element sets")
+    return text
+
+
+def fetch_group_tle(group: str, timeout_s: float = 60.0) -> str:
+    return fetch_gp({"GROUP": group}, timeout_s)
+
+
+def fetch_satcat(timeout_s: float = 120.0) -> str:
+    text = _download(CELESTRAK_SATCAT_URL, None, "SATCAT", timeout_s)
+    if not text.startswith("OBJECT_NAME"):
+        raise DataUnavailable("CelesTrak SATCAT response is not the expected CSV")
     return text
 
 
@@ -80,3 +101,29 @@ def cached_groups() -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def _cache_entry(key: str, ext: str) -> Tuple[Path, Path]:
+    base = get_settings().cache_path
+    return base / f"explorer_{key}.{ext}", base / f"explorer_{key}.meta.json"
+
+
+def save_entry(key: str, ext: str, url: str, text: str) -> Dict[str, Any]:
+    data_path, meta_path = _cache_entry(key, ext)
+    data_path.write_text(text, encoding="utf-8")
+    meta = {"key": key, "url": url, "retrieved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "line_count": len([ln for ln in text.splitlines() if ln.strip()])}
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return meta
+
+
+def read_entry(key: str, ext: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    data_path, meta_path = _cache_entry(key, ext)
+    if not (data_path.exists() and meta_path.exists()):
+        return None
+    return data_path.read_text(encoding="utf-8"), json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def entry_age_s(key: str, ext: str) -> Optional[float]:
+    data_path, _ = _cache_entry(key, ext)
+    return time.time() - data_path.stat().st_mtime if data_path.exists() else None

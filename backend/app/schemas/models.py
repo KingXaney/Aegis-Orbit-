@@ -347,5 +347,39 @@ class DataRefreshResponse(BaseModel):
     groups: List[Dict[str, Any]] = []
 
 
+class CatalogObject(BaseModel):
+    norad_id: int
+    name: str
+    type: str = Field(description="PAYLOAD | DEBRIS | ROCKET_BODY")
+    owner: Optional[str] = Field(default=None, description="SATCAT owner/operator code")
+    launch_date: Optional[str] = None
+    intl_designator: Optional[str] = None
+    orbit_class: str = Field(description="LEO | MEO | GEO | HEO")
+    inclination_deg: float
+    period_min: float
+    perigee_km: float
+    apogee_km: float
+    epoch: str
+    tle1: str
+    tle2: str
+
+
+class CatalogResponse(BaseModel):
+    source: str
+    origin: str = Field(description="cache | fixture")
+    retrieved_at: Optional[str] = None
+    note: str
+    total: int
+    rejected: int
+    counts_by_type: Dict[str, int]
+    objects: List[CatalogObject]
+
+
+class CatalogRefreshResponse(BaseModel):
+    status: str
+    retrieved_at: Optional[str] = None
+    detail: str
+
+
 ScenarioDetail.model_rebuild()
 AgentRunResponse.model_rebuild()

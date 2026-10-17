@@ -392,3 +392,36 @@ export interface DecisionResponse {
   secondary_check: SecondaryCheckResponse | null;
   simulation: SimulationState;
 }
+
+// ---------------------------------------------------------------- explorer catalog
+
+export type CatalogObjectType = 'PAYLOAD' | 'DEBRIS' | 'ROCKET_BODY';
+export type OrbitClass = 'LEO' | 'MEO' | 'GEO' | 'HEO';
+
+export interface CatalogObject {
+  norad_id: number;
+  name: string;
+  type: CatalogObjectType;
+  owner: string | null;
+  launch_date: string | null;
+  intl_designator: string | null;
+  orbit_class: OrbitClass;
+  inclination_deg: number;
+  period_min: number;
+  perigee_km: number;
+  apogee_km: number;
+  epoch: string;
+  tle1: string;
+  tle2: string;
+}
+
+export interface CatalogResponse {
+  source: string;
+  origin: 'cache' | 'fixture';
+  retrieved_at: string | null;
+  note: string;
+  total: number;
+  rejected: number;
+  counts_by_type: Record<string, number>;
+  objects: CatalogObject[];
+}

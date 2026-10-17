@@ -19,6 +19,17 @@
   --color-accent: #a5b4fc;
   --font-sans: 'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+
+  /* Catalog explorer (home page) */
+  --color-x-void: #03060c;
+  --color-x-hull: #0a1220;
+  --color-x-graticule: #1a2640;
+  --color-x-readout: #e2eaf5;
+  --color-x-muted: #8696b2;
+  --color-x-payload: #5ce1f0;
+  --color-x-debris: #ff6b3d;
+  --color-x-rocket: #f4c542;
+  --font-b612: 'B612', 'Segoe UI', system-ui, sans-serif;
 }
 
 html,
@@ -94,4 +105,104 @@ input[type='range'].scrubber:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   .pulse { animation: none; }
+}
+
+/* ------------------------------------------------------------ catalog explorer */
+
+.explorer {
+  font-size: 14px;
+  font-feature-settings: 'tnum' 1;
+}
+/* Text that floats directly over the globe stays legible against the dense object field. */
+.x-over-globe {
+  text-shadow: 0 1px 2px rgb(3 6 12 / 0.9), 0 0 18px rgb(3 6 12 / 0.85);
+}
+.x-panel {
+  background: color-mix(in srgb, var(--color-x-hull) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-x-readout) 7%, transparent);
+  border-radius: 14px;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+.x-field {
+  border-radius: 8px;
+  border: 1px solid var(--color-x-graticule);
+  background: color-mix(in srgb, var(--color-x-void) 70%, transparent);
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--color-x-readout);
+}
+.x-field::placeholder {
+  color: var(--color-x-muted);
+}
+.x-row {
+  /* Contains its visually hidden input, so focusing it never scrolls the page. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.x-row:hover {
+  background: rgb(255 255 255 / 0.04);
+}
+.x-button {
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-x-readout) 14%, transparent);
+  background: color-mix(in srgb, var(--color-x-hull) 70%, transparent);
+  padding: 5px 11px;
+  font-size: 12px;
+  color: var(--color-x-readout);
+  transition: border-color 120ms;
+  backdrop-filter: blur(10px);
+}
+.x-button:hover {
+  border-color: color-mix(in srgb, var(--color-x-readout) 35%, transparent);
+}
+.x-field:focus-visible,
+.x-button:focus-visible,
+.x-focus:focus-visible,
+.x-row:has(input:focus-visible) {
+  outline: 2px solid var(--color-x-payload);
+  outline-offset: 1px;
+}
+.x-button-primary {
+  background: var(--color-x-readout);
+  border-color: var(--color-x-readout);
+  color: var(--color-x-void);
+  font-weight: 700;
+  padding: 7px 14px;
+  font-size: 14px;
+}
+.x-button-primary:hover {
+  background: #fff;
+}
+@keyframes x-sheet-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+.x-sheet-in {
+  animation: x-sheet-in 200ms ease-out;
+}
+@keyframes x-live {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-x-payload) 60%, transparent); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+.x-live-dot {
+  animation: x-live 2s ease-in-out infinite;
+}
+@keyframes x-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.x-card-in {
+  animation: x-card-in 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .x-card-in,
+  .x-sheet-in,
+  .x-live-dot { animation: none; }
 }
