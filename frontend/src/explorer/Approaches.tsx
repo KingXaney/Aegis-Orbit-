@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ApproachRecord } from '../types/api';
 import { TYPE_INK } from './palette';
+import { revealGlobe } from './reveal';
 import { approachKey, useExplorerStore } from './store';
 
 // The signature of the page: what the simulator's screening finds for the real GPM over the next
@@ -40,17 +41,6 @@ function useNow(): number {
     return () => clearInterval(t);
   }, []);
   return now;
-}
-
-/** On phones the globe sits above the rail; bring it into view when a pass is opened. */
-function revealGlobe() {
-  const globe = document.getElementById('globe');
-  if (!globe) return;
-  const r = globe.getBoundingClientRect();
-  const visible = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
-  if (visible >= r.height * 0.6) return;
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  globe.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
 }
 
 function useApproachHandlers(a: ApproachRecord) {

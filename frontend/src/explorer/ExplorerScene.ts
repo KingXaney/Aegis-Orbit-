@@ -108,6 +108,8 @@ export class ExplorerScene {
   private selected: number | null = null;
   private hovered: number | null = null;
   private approach: SceneApproach | null = null;
+  /** A focus asked for before the first state arrived (a shared ?object= link). */
+  private pendingFocus: number | null = null;
   private routeLines: { line: Cesium.Polyline; positions: Cesium.Cartesian3[] }[] = [];
   private revealStart: number | null = null;
   private revealDuration = 0;
@@ -313,7 +315,13 @@ export class ExplorerScene {
     const first = this.state === null;
     this.state = buffer;
     this.stateUnix = unix;
-    if (first) this.viewOverModel();
+    if (first && this.pendingFocus !== null) {
+      const index = this.pendingFocus;
+      this.pendingFocus = null;
+      this.focus(index);
+    } else if (first) {
+      this.viewOverModel();
+    }
     if (first && !this.reducedMotion) this.startIntro();
   }
 
@@ -403,7 +411,11 @@ export class ExplorerScene {
    */
   focus(index: number): void {
     const s = this.state;
-    if (!s || !Number.isFinite(s[index * STRIDE])) return;
+    if (!s) {
+      this.pendingFocus = index;
+      return;
+    }
+    if (!Number.isFinite(s[index * STRIDE])) return;
     const o = index * STRIDE;
     const r = new Cesium.Cartesian3(s[o], s[o + 1], s[o + 2]);
     const h = Cesium.Cartesian3.cross(r, new Cesium.Cartesian3(s[o + 3], s[o + 4], s[o + 5]), new Cesium.Cartesian3());

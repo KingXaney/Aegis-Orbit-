@@ -68,7 +68,7 @@ export default function DetailsCard() {
           </p>
           <h2 className="x-display mt-1 break-words text-x-28">{o.name}</h2>
         </div>
-        <button type="button" onClick={() => select(null)} className="x-button -mr-1 -mt-1 border-transparent bg-transparent px-0" aria-label="Close details">
+        <button type="button" onClick={() => select(null)} className="x-button -mr-1 -mt-1 border-transparent bg-transparent px-0 hover:bg-x-raised" aria-label="Close details">
           <CloseIcon />
         </button>
       </div>

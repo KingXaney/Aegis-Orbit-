@@ -23,6 +23,19 @@ export interface ApproachesState {
 const APPROACHES_REFRESH_MS = 10 * 60 * 1000;
 let approachesTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** The selected object is mirrored in the URL (?object=<NORAD ID>) so a view can be shared. */
+function writeObjectParam(norad: number | null): void {
+  const url = new URL(window.location.href);
+  if (norad === null) url.searchParams.delete('object');
+  else url.searchParams.set('object', String(norad));
+  window.history.replaceState(window.history.state, '', url);
+}
+
+function readObjectParam(): number | null {
+  const v = Number(new URLSearchParams(window.location.search).get('object'));
+  return Number.isInteger(v) && v > 0 ? v : null;
+}
+
 export interface LiveState {
   altitudeKm: number;
   speedKms: number;
@@ -89,7 +102,9 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
   const refilter = (filters: Filters, failed = get().failed) => {
     const { mask, visible, byType } = computeMask(get().objects, filters, failed);
     const sel = get().selected;
-    set({ filters, failed, mask, visible, visibleByType: byType, ...(sel !== null && !mask[sel] ? { selected: null, live: null } : {}) });
+    const hidesSelection = sel !== null && !mask[sel];
+    set({ filters, failed, mask, visible, visibleByType: byType, ...(hidesSelection ? { selected: null, live: null } : {}) });
+    if (hidesSelection) writeObjectParam(null);
   };
 
   return {
@@ -122,6 +137,10 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
         const model = objects.findIndex((o) => o.norad_id === MODEL_NORAD_ID);
         set({ objects, meta, owners: ownerCounts(objects), modelIndex: model >= 0 ? model : null, status: 'ready', selected: null });
         refilter(get().filters, new Uint8Array(objects.length));
+        const shared = readObjectParam();
+        const index = shared === null ? -1 : objects.findIndex((o) => o.norad_id === shared);
+        if (index >= 0) get().focus(index);
+        else if (shared !== null) writeObjectParam(null);
       } catch (e) {
         set({ status: 'error', error: errMsg(e) });
       }
@@ -167,8 +186,14 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     resetFilters: () => refilter(DEFAULT_FILTERS),
     setShowPaths: (showPaths) => set({ showPaths }),
     setPanelOpen: (panelOpen) => set({ panelOpen }),
-    select: (selected) => set({ selected, live: null }),
-    focus: (index) => set({ selected: index, live: null, focusRequest: { index, nonce: (get().focusRequest?.nonce ?? 0) + 1 } }),
+    select: (selected) => {
+      set({ selected, live: null });
+      writeObjectParam(selected === null ? null : (get().objects[selected]?.norad_id ?? null));
+    },
+    focus: (index) => {
+      set({ selected: index, live: null, focusRequest: { index, nonce: (get().focusRequest?.nonce ?? 0) + 1 } });
+      writeObjectParam(get().objects[index]?.norad_id ?? null);
+    },
     setFailed: (failed) => {
       const prev = get().failed;
       if (prev.length === failed.length && prev.every((v, i) => v === failed[i])) return;

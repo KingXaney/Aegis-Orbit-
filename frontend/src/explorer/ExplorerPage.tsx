@@ -7,6 +7,7 @@ import { API_BASE } from '../api/client';
 import Approaches from './Approaches';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
+import FindBox from './FindBox';
 import { OBJECT_TYPES, activeFilterCount } from './filters';
 import { FiltersIcon } from './icons';
 import { TYPE_INK } from './palette';
@@ -105,7 +106,10 @@ function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButt
         </h2>
         <FiltersButton buttonRef={filtersButton} />
       </div>
-      <ul className="mt-3" aria-label="Objects shown, by type">
+      <div className="mt-4">
+        <FindBox />
+      </div>
+      <ul className="mt-4" aria-label="Objects shown, by type">
         {OBJECT_TYPES.map((t) => (
           <li key={t} className="flex min-h-8 items-center gap-3">
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
@@ -177,7 +181,7 @@ export default function ExplorerPage() {
 
   return (
     <main className="explorer grid min-h-full bg-x-bg font-x-body text-x-text [grid-template-areas:'head'_'globe'_'body'] [grid-template-rows:auto_56svh_auto] lg:h-full lg:grid-cols-[minmax(360px,420px)_1fr] lg:[grid-template-areas:'head_globe'_'body_globe'] lg:[grid-template-rows:auto_1fr]">
-      <header className="px-4 pb-6 pt-4 [grid-area:head] md:px-6 lg:border-r lg:border-x-divider lg:pt-6">
+      <header inert={panelOpen} className="px-4 pb-6 pt-4 [grid-area:head] md:px-6 lg:border-r lg:border-x-divider lg:pt-6">
         <SiteHeader />
         <h1 className="x-display mt-8 text-x-28 lg:mt-10 2xl:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
         <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
@@ -187,7 +191,7 @@ export default function ExplorerPage() {
         <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
       </header>
 
-      <section id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
+      <section inert={panelOpen} id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
         <Suspense fallback={null}>
           <GlobeCanvas />
         </Suspense>
@@ -201,7 +205,7 @@ export default function ExplorerPage() {
         {status === 'ready' && <DetailsCard />}
       </section>
 
-      <div className="flex flex-col gap-8 px-4 py-8 [grid-area:body] md:px-6 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
+      <div inert={panelOpen} className="flex flex-col gap-8 px-4 py-8 [grid-area:body] md:px-6 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
         {status === 'loading' && (
           <p className="text-x-14 text-x-muted" role="status">
             Loading the orbital catalog…
