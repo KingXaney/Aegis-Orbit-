@@ -35,6 +35,10 @@ class SimulationSession:
     decisions: List[Dict[str, Any]] = field(default_factory=list)
     approved_maneuver_id: Optional[str] = None
     post_approval: Optional[Dict[str, Any]] = None
+    perception_cache: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+
+    def invalidate_perception(self) -> None:
+        self.perception_cache.clear()
 
     @property
     def scenario_id(self) -> str:

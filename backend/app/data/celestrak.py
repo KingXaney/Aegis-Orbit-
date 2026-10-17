@@ -16,6 +16,8 @@ import httpx
 from ..config import get_settings
 
 CELESTRAK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
+# CelesTrak rejects some default library user agents with 403; identify the client honestly.
+USER_AGENT = "aegis-orbit-simulator/0.1 (+https://github.com/KingXaney/Aegis-Orbit-; research prototype)"
 
 
 class DataUnavailable(RuntimeError):
@@ -33,7 +35,7 @@ def fetch_group_tle(group: str, timeout_s: float = 60.0) -> str:
         raise DataUnavailable("network access is disabled (ALLOW_NETWORK=false)")
     try:
         resp = httpx.get(CELESTRAK_GP_URL, params={"GROUP": group, "FORMAT": "tle"}, timeout=timeout_s,
-                         follow_redirects=True)
+                         follow_redirects=True, headers={"User-Agent": USER_AGENT, "Accept": "text/plain,*/*"})
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         raise DataUnavailable(f"could not download CelesTrak group '{group}': {exc}") from exc

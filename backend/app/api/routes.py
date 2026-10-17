@@ -11,8 +11,8 @@ from ..config import get_settings
 from ..data import celestrak
 from ..scenarios.registry import list_scenarios
 from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproveRequest, DataRefreshResponse,
-                              DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PlanRequest,
-                              PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
+                              DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PerceptionModelInfo,
+                              PerceptionResponse, PlanRequest, PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
                               ScreenResponse, SecondaryCheckRequest, SecondaryCheckResponse, SimulationState,
                               TrajectoryBatchRequest, TrajectoryBatchResponse, TrajectoryResponse)
 from ..simulation import service
@@ -144,6 +144,22 @@ def agent_analyze(req: AgentAnalyzeRequest):
         raise HTTPException(status_code=404, detail=exc.args[0] if exc.args else str(exc)) from exc
     except service.BadRequest as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/perception", response_model=PerceptionResponse)
+def perception(scenario_id: str = Query(...),
+               horizon_s: Optional[float] = Query(default=None, gt=0, le=7 * 86400),
+               critical_radius_km: Optional[float] = Query(default=None, gt=0, le=100),
+               tracked_radius_km: Optional[float] = Query(default=None, gt=0, le=200),
+               maneuver_id: Optional[str] = None, include_hidden: bool = False, trails: bool = True):
+    """ML-ranked, physics-verified objects around the primary (the Waymo-style perception layer)."""
+    return _call(service.perception, _session(scenario_id), horizon_s, critical_radius_km, tracked_radius_km,
+                 maneuver_id, include_hidden, trails)
+
+
+@router.get("/perception/model", response_model=PerceptionModelInfo)
+def perception_model():
+    return service.perception_model_info()
 
 
 @router.get("/simulation/state", response_model=SimulationState)

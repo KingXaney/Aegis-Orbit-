@@ -17,6 +17,10 @@ frontend/.vite/
 .env.local
 *.local
 
+# Perception training datasets (regenerable, large)
+data/models/*.npz
+data/models/*.tmp
+
 # Runtime caches (downloaded orbital data, sessions)
 data/cache/*
 !data/cache/.gitkeep

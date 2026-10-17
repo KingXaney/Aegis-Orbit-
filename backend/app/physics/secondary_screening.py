@@ -73,10 +73,11 @@ def check_secondary(cand: ManeuverCandidate, primary: OrbitalObject, objects: Se
     if not result.stats["complete"]:
         limitations.append("some catalog objects could not be propagated")
     complete = result.stats["complete"]
-    if not complete:
-        status = "LIMITED"
-    elif worst_new >= ORDER.index("UNVERIFIED") or not original_ok:
+    # A failing verdict must never be masked by an incomplete screen.
+    if worst_new >= ORDER.index("UNVERIFIED") or not original_ok:
         status = "FAIL"
+    elif not complete:
+        status = "LIMITED"
     else:
         status = "PASS"
     return {

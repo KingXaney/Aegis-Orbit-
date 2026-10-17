@@ -99,6 +99,7 @@ class ScreeningResult:
     stats: Dict[str, Any]
     co_orbital: List[Dict[str, Any]] = field(default_factory=list)
     propagation_failures: List[Dict[str, Any]] = field(default_factory=list)
+    coarse_minima: Dict[str, Tuple[float, float]] = field(default_factory=dict)  # object_id -> (min distance km, time)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -231,6 +232,7 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
 
     found: List[Conjunction] = []
     co_orbital: List[Dict[str, Any]] = []
+    coarse_minima: Dict[str, Tuple[float, float]] = {}
     n_minima = 0
     for obj in candidates:
         res_s = results[obj.object_id]
@@ -241,7 +243,9 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
             failures.append({"object_id": obj.object_id, "messages": res_s.messages, "partial": True})
         rel = res_s.positions_km - res_p.positions_km
         d = np.linalg.norm(rel, axis=1)
-        if np.nanmin(d) > screening_radius_km + 2.0 * coarse_step_s * 16.0:  # 16 km/s: max LEO relative speed
+        i_coarse = int(np.nanargmin(d))
+        coarse_minima[obj.object_id] = (float(d[i_coarse]), float(times[i_coarse]))
+        if d[i_coarse] > screening_radius_km + 2.0 * coarse_step_s * 16.0:  # 16 km/s: max LEO relative speed
             continue
         rel_v = res_s.velocities_kms - res_p.velocities_kms
         speed = np.linalg.norm(rel_v, axis=1)
@@ -315,7 +319,7 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
         "duration_s": round(_time.time() - t_wall, 3),
         "complete": len(failures) == 0,
     }
-    return ScreeningResult(found, stats, co_orbital, failures)
+    return ScreeningResult(found, stats, co_orbital, failures, coarse_minima)
 
 
 def dedupe(conjunctions: List[Conjunction], coarse_step_s: float) -> List[Conjunction]:

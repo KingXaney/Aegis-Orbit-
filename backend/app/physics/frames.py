@@ -37,6 +37,37 @@ def inertial_to_rtn(vec: np.ndarray, r: np.ndarray, v: np.ndarray) -> np.ndarray
     return rtn_basis(r, v).T @ np.asarray(vec, dtype=float)
 
 
+def relative_state_rtn(r_p: np.ndarray, v_p: np.ndarray, r_s: np.ndarray, v_s: np.ndarray):
+    """Relative position and *co-moving* relative velocity of a secondary with
+    respect to a primary, expressed in the primary's RTN frame (km, km/s).
+
+    The RTN frame rotates with the primary at omega = (r x v)/|r|^2, so the
+    velocity seen by an observer riding with the primary is
+    (v_s - v_p) - omega x (r_s - r_p). The inertial velocity difference is what
+    the screening reports as ``relative_velocity_teme``; this helper gives the
+    rotating-frame value used for local (Waymo-style) views.
+    """
+    r_p = np.asarray(r_p, dtype=float)
+    v_p = np.asarray(v_p, dtype=float)
+    rel_r = np.asarray(r_s, dtype=float) - r_p
+    omega = np.cross(r_p, v_p) / np.dot(r_p, r_p)
+    v_rel = (np.asarray(v_s, dtype=float) - v_p) - np.cross(omega, rel_r)
+    basis = rtn_basis(r_p, v_p)
+    return basis.T @ rel_r, basis.T @ v_rel
+
+
+def relative_positions_rtn(rp: np.ndarray, vp: np.ndarray, rs: np.ndarray) -> np.ndarray:
+    """Batched (N,3) secondary-minus-primary positions in the primary's RTN frame."""
+    rp = np.asarray(rp, dtype=float)
+    vp = np.asarray(vp, dtype=float)
+    rel = np.asarray(rs, dtype=float) - rp
+    R = rp / np.linalg.norm(rp, axis=1, keepdims=True)
+    h = np.cross(rp, vp)
+    N = h / np.linalg.norm(h, axis=1, keepdims=True)
+    T = np.cross(N, R)
+    return np.stack([np.einsum("ij,ij->i", rel, R), np.einsum("ij,ij->i", rel, T), np.einsum("ij,ij->i", rel, N)], axis=1)
+
+
 def covariance_rtn_to_inertial(cov_rtn: np.ndarray, r: np.ndarray, v: np.ndarray) -> np.ndarray:
     M = rtn_basis(r, v)
     return M @ np.asarray(cov_rtn, dtype=float) @ M.T

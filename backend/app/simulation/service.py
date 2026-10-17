@@ -16,6 +16,8 @@ from ..physics import collision_probability as cp
 from ..physics import maneuver_planner as mp
 from ..physics import secondary_screening as ss
 from ..physics import screening
+from ..perception.model import load_risk_model
+from ..perception.perception import perceive
 from ..physics.frames import ecef_to_geodetic, osculating_elements, teme_to_ecef
 from ..physics.propagation import propagate
 from ..physics.threat import ORDER, evaluate_threat_state, meets_mitigation_target, thresholds_summary, worst_state
@@ -209,6 +211,7 @@ def run_screening(sess: SimulationSession, primary_id: Optional[str] = None, sta
     sess.conjunctions = {c.conjunction_id: c for c in result.conjunctions}
     sess.screening = result.to_dict()
     sess.screening_pc_policy = policy
+    sess.invalidate_perception()
     return {
         "scenario_id": sess.scenario_id, "primary_id": primary_id,
         "conjunctions": [_decorate(sess, c) for c in result.conjunctions],
@@ -316,6 +319,7 @@ def approve(sess: SimulationSession, maneuver_id: str) -> Dict[str, Any]:
                        f"{check['original_encounter']['meets_target']})")
     decision = sess.record_decision("APPROVED", maneuver_id)
     sess.approved_maneuver_id = maneuver_id
+    sess.invalidate_perception()
     ok, basis = meets_mitigation_target(cand.post_miss_distance_km, cand.post_pc, get_settings())
     new_states = [c["threat_state"] for c in check["new_conjunctions"]]
     residual = [x["after_state"] for x in check["changed_conjunctions"] if x.get("after_state")]
@@ -342,5 +346,27 @@ def reject(sess: SimulationSession, maneuver_id: str, reason: Optional[str] = No
     if sess.approved_maneuver_id == maneuver_id:
         sess.approved_maneuver_id = None
         sess.post_approval = None
+        sess.invalidate_perception()
     return {"decision": decision, "maneuver": cand.to_dict(), "secondary_check": sess.secondary_checks.get(maneuver_id),
             "simulation": sess.state_summary()}
+
+
+# --------------------------------------------------------------------------
+# perception
+# --------------------------------------------------------------------------
+
+def perception(sess: SimulationSession, horizon_s: Optional[float] = None, critical_radius_km: Optional[float] = None,
+               tracked_radius_km: Optional[float] = None, maneuver_id: Optional[str] = None,
+               include_hidden: bool = False, trails: bool = True) -> Dict[str, Any]:
+    if maneuver_id and maneuver_id not in sess.maneuvers:
+        raise NotFound(f"maneuver '{maneuver_id}' not found in this session")
+    try:
+        return perceive(sess, horizon_s=horizon_s, critical_radius_km=critical_radius_km,
+                        tracked_radius_km=tracked_radius_km, maneuver_id=maneuver_id, include_hidden=include_hidden,
+                        trails=trails, settings=get_settings())
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+
+
+def perception_model_info() -> Dict[str, Any]:
+    return load_risk_model(get_settings().perception_model_meta_file).info.to_dict()

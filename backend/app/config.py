@@ -54,6 +54,30 @@ class Settings(BaseSettings):
     planner_min_lead_time_s: float = 1800.0
     planner_numerical_step_s: float = 10.0
 
+    # --- Perception (demo settings) ---------------------------------------
+    perception_enabled: bool = True
+    perception_model_meta_path: Path = Path("data/models/perception_risk.meta.json")
+    perception_min_horizon_orbits: float = 2.0  # >= the planner's longest lead time
+    perception_critical_radius_km: float = 5.0  # same meaning as miss_distance_target_km: inside it, mitigation is needed
+    perception_ml_watch_threshold: Optional[float] = None  # None -> operating threshold stored in the model metadata
+    perception_full_screen_max_objects: int = 1500  # <= this many objects: physics-screen the whole altitude-filtered set
+    perception_screen_top_k: int = 300  # larger catalogs: physics-verify the ML top-K plus the near band
+    perception_guaranteed_band_margin_km: float = 10.0
+    perception_max_watch_objects: int = 50
+    perception_near_field_horizon_s: float = 1800.0  # semi-critical/watch objects are drawn only this far ahead
+    perception_trail_half_width_s: float = 90.0
+    perception_trail_step_s: float = 5.0
+    perception_training_groups: str = "stations,active,cosmos-2251-debris,iridium-33-debris,fengyun-1c-debris"
+
+    @property
+    def perception_model_meta_file(self) -> Path:
+        p = self.perception_model_meta_path
+        return p if p.is_absolute() else REPO_ROOT / p
+
+    @property
+    def perception_training_group_list(self) -> List[str]:
+        return [g.strip() for g in self.perception_training_groups.split(",") if g.strip()]
+
     @property
     def cors_origin_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

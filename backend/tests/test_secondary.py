@@ -22,3 +22,22 @@ def test_candidate_missing_target_fails(synthetic_catalog, synthetic_window, syn
                           synthetic_screening.conjunctions)
     assert res["validation_status"] == "FAIL"
     assert not res["original_encounter"]["meets_target"]
+
+
+def test_incomplete_screen_cannot_mask_a_failure(synthetic_catalog, synthetic_window, synthetic_screening, synthetic_plan, monkeypatch):
+    from app.physics import secondary_screening as ss
+    from app.physics.screening import ScreeningResult
+
+    weak = next(c for c in synthetic_plan.candidates if c.feasible and not c.meets_target)
+    primary = synthetic_catalog.require(synthetic.PRIMARY_ID)
+    real_screen = ss.screen
+
+    def incomplete(*args, **kwargs):
+        res = real_screen(*args, **kwargs)
+        res.stats["complete"] = False
+        return res
+
+    monkeypatch.setattr(ss, "screen", incomplete)
+    res = ss.check_secondary(weak, primary, synthetic_catalog.others(synthetic.PRIMARY_ID), synthetic_window["end_unix"],
+                             synthetic_screening.conjunctions)
+    assert res["validation_status"] == "FAIL" and res["complete"] is False

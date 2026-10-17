@@ -91,3 +91,20 @@ def test_real_scenario_is_honest_about_uncertainty(client):
         assert c["primary_model"] == "SGP4"
     names = [x["name"].strip() for x in scr["co_orbital"]]
     assert any("PROGRESS" in n for n in names)
+
+
+def test_perception_endpoints(client):
+    r = client.get("/api/perception", params={"scenario_id": SID})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["objects"][0]["tier"] == "CRITICAL" and d["objects"][0]["object_id"] == synthetic.SECONDARY_ID
+    assert d["counts"]["CRITICAL"] == 1 and d["screening_mode"] == "FULL_PHYSICS" and d["tier_rules"]
+    assert d["model"]["status"] in ("LOADED", "UNAVAILABLE") and d["disclaimer"]
+    assert client.get("/api/perception", params={"scenario_id": SID, "maneuver_id": "MV-nope"}).status_code == 404
+    assert client.get("/api/perception", params={"scenario_id": SID, "critical_radius_km": 30, "tracked_radius_km": 25}).status_code == 400
+    real_r = client.get("/api/perception", params={"scenario_id": real.SCENARIO_ID})
+    assert real_r.status_code == 200
+    rd = real_r.json()
+    assert rd["complete"] and rd["counts"]["CRITICAL"] == 0 and rd["counts"]["SEMI_CRITICAL"] == 12
+    assert all(o["physics"]["pc"]["status"] == "UNVERIFIED" for o in rd["objects"] if o["tier"] == "SEMI_CRITICAL")
+    assert client.get("/api/perception/model").status_code == 200

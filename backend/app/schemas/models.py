@@ -347,5 +347,98 @@ class DataRefreshResponse(BaseModel):
     groups: List[Dict[str, Any]] = []
 
 
+class PerceptionML(BaseModel):
+    score: Optional[float] = None
+    predicted_tier: Optional[str] = None
+    model_version: Optional[str] = None
+    basis: str
+    note: Optional[str] = None
+    elements_basis: Optional[str] = None
+
+
+class PerceptionTrail(BaseModel):
+    frame: str
+    center_unix: float
+    step_s: float
+    times_unix: List[float]
+    positions_rtn_km: List[List[float]]
+    basis: str
+
+
+class PerceptionPhysics(BaseModel):
+    status: str
+    verified: bool
+    conjunction_id: Optional[str] = None
+    linked_conjunction_id: Optional[str] = None
+    link_basis: Optional[str] = None
+    clearance: Optional[str] = None
+    tca: Optional[str] = None
+    tca_unix: Optional[float] = None
+    time_to_tca_s: Optional[float] = None
+    miss_distance_km: Optional[float] = None
+    relative_speed_kms: Optional[float] = None
+    miss_vector_rtn_km: Optional[List[float]] = None
+    relative_velocity_rtn_kms: Optional[List[float]] = None
+    relative_position_teme_km: Optional[List[float]] = None
+    threat_state: Optional[str] = None
+    threat_rationale: List[str] = []
+    pc: Optional[Dict[str, Any]] = None
+    coarse_min_distance_km: Optional[float] = None
+    coarse_min_at: Optional[str] = None
+    models: Dict[str, Optional[str]] = {}
+    segment: Optional[str] = None
+
+
+class PerceptionObject(BaseModel):
+    object_id: str
+    name: str
+    category: str
+    tier: str
+    rank: int
+    ml: PerceptionML
+    physics: PerceptionPhysics
+    trail: Optional[PerceptionTrail] = None
+
+
+class PerceptionModelInfo(BaseModel):
+    status: str
+    library: Optional[str] = None
+    library_version: Optional[str] = None
+    model_version: Optional[str] = None
+    artifact: Optional[str] = None
+    feature_version: int
+    feature_names: List[str]
+    trained_at: Optional[str] = None
+    data_retrieved_at: Dict[str, str] = {}
+    training: Dict[str, Any] = {}
+    metrics: Dict[str, Any] = {}
+    feature_importance: Dict[str, float] = {}
+    threshold: Optional[float] = None
+    threshold_basis: Optional[str] = None
+    artifacts: Dict[str, Any] = {}
+    reason: Optional[str] = None
+    basis: str
+
+
+class PerceptionResponse(BaseModel):
+    scenario_id: str
+    primary_id: str
+    primary_variant: Dict[str, Any]
+    horizon: Dict[str, Any]
+    thresholds: Dict[str, Any]
+    tier_rules: List[str]
+    screening_mode: str
+    objects: List[PerceptionObject]
+    counts: Dict[str, int]
+    model: PerceptionModelInfo
+    stats: Dict[str, Any]
+    co_orbital: List[Dict[str, Any]] = []
+    propagation_failures: List[Dict[str, Any]] = []
+    complete: bool
+    limitations: List[str] = []
+    disclaimer: str
+    cached: bool = False
+
+
 ScenarioDetail.model_rebuild()
 AgentRunResponse.model_rebuild()
