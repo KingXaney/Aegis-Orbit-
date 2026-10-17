@@ -1,56 +1,105 @@
 import '@fontsource/b612/400.css';
 import '@fontsource/b612/700.css';
-import { useEffect, useRef, useState } from 'react';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/barlow-condensed/600.css';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../api/client';
-import { formatUtc } from '../lib/format';
+import Approaches from './Approaches';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
-import { OBJECT_TYPES, TYPE_COLOR, activeFilterCount } from './filters';
-import GlobeCanvas from './GlobeCanvas';
+import FindBox from './FindBox';
+import GlobeBoundary from './GlobeBoundary';
+import { OBJECT_TYPES, activeFilterCount } from './filters';
+import { CriticalMark, DetectedMark, FiltersIcon } from './icons';
+import { TYPE_INK } from './palette';
 import { useExplorerStore } from './store';
 
+// Cesium is most of the page's weight; loading it separately lets the text paint first.
+const GlobeCanvas = lazy(() => import('./GlobeCanvas'));
+
 const nf = new Intl.NumberFormat('en-US');
+const retrievedFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
+const clockFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
 
-const PAGES = [
-  { href: '/', label: 'Home' },
-  { href: '/mission', label: 'Mission simulator' },
-];
+const TYPE_PLURAL = { PAYLOAD: 'Active satellites', DEBRIS: 'Debris', ROCKET_BODY: 'Rocket bodies' } as const;
 
-const STAT_LABEL = { PAYLOAD: 'Active satellites', DEBRIS: 'Debris', ROCKET_BODY: 'Rocket bodies' } as const;
-
-function SiteNav() {
-  const path = window.location.pathname;
+function SiteHeader() {
   return (
-    <nav aria-label="Pages" className="x-panel pointer-events-auto flex gap-0.5 rounded-full p-1">
-      {PAGES.map((p) => {
-        const current = p.href === '/' ? !path.startsWith('/mission') : path.startsWith(p.href);
-        return (
-          <a
-            key={p.href}
-            href={p.href}
-            aria-current={current ? 'page' : undefined}
-            className={`x-focus rounded-full px-3.5 py-1.5 text-[12px] transition-colors ${current ? 'bg-x-readout text-x-void' : 'text-x-muted hover:text-x-readout'}`}
-          >
-            {p.label}
-          </a>
-        );
-      })}
-    </nav>
+    <div className="flex min-h-10 items-center justify-between gap-4">
+      <a href="/" aria-current="page" className="x-display x-focus inline-flex min-h-10 items-center rounded-[4px] text-x-21">
+        Aegis Orbit
+      </a>
+      <nav aria-label="Pages">
+        <a href="/mission" className="x-link text-x-14">
+          Simulator
+        </a>
+      </nav>
+    </div>
   );
 }
 
-function LiveClock() {
-  const [now, setNow] = useState(() => Date.now() / 1000);
+function UtcClock() {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
   return (
-    <p className="flex items-center gap-2 text-[12px] text-x-muted">
-      <span className="x-live-dot h-1.5 w-1.5 rounded-full bg-x-payload" aria-hidden="true" />
-      Live
-      <span className="tabular-nums text-x-readout">{formatUtc(now, false)}</span>
+    <p className="pointer-events-none absolute left-4 top-4 rounded-[4px] bg-x-bg px-2 py-1 text-x-12 text-x-muted">
+      Positions at <span className="text-x-text">{clockFormat.format(now)}</span> UTC
     </p>
+  );
+}
+
+/** The globe's colour key, on the globe. */
+function GlobeKey() {
+  const highlight = useExplorerStore((s) => s.highlightDetections);
+  const critical = useExplorerStore((s) => s.approaches.data?.critical_distance_km ?? null);
+  const items: [string, string][] = [
+    ['var(--x-accent)', 'GPM and its orbit'],
+    [TYPE_INK.PAYLOAD, 'Active satellites'],
+    [TYPE_INK.DEBRIS, 'Debris'],
+    [TYPE_INK.ROCKET_BODY, 'Rocket bodies'],
+  ];
+  return (
+    <ul className="pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-x-4 gap-y-1 rounded-[4px] bg-x-bg px-2 py-1 text-x-12 text-x-muted max-lg:right-4" aria-label="Colour key">
+      {items.map(([ink, label]) => (
+        <li key={label} className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full" style={{ background: ink }} aria-hidden="true" />
+          {label}
+        </li>
+      ))}
+      {highlight && critical !== null && (
+        <>
+          <li className="flex items-center gap-2">
+            <DetectedMark />
+            Passes near GPM
+          </li>
+          <li className="flex items-center gap-2 text-x-warning">
+            <CriticalMark />
+            Critical, under {critical} km
+          </li>
+        </>
+      )}
+    </ul>
+  );
+}
+
+/** Steps the rest of the catalog back so GPM's detections read as the population around its orbit. */
+function HighlightSwitch() {
+  const on = useExplorerStore((s) => s.highlightDetections);
+  const setOn = useExplorerStore((s) => s.setHighlightDetections);
+  return (
+    <label className="x-row -mx-2 mt-2">
+      <input type="checkbox" role="switch" className="peer sr-only" checked={on} onChange={() => setOn(!on)} />
+      <span
+        className={`relative h-5 w-9 shrink-0 rounded-full border transition-[background-color,border-color] duration-150 ${on ? 'border-x-text bg-x-text' : 'border-x-control'}`}
+        aria-hidden="true"
+      >
+        <span className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full transition-[transform,background-color] duration-150 ease-[var(--x-ease)] ${on ? 'translate-x-4 bg-x-bg' : 'bg-x-muted'}`} />
+      </span>
+      <span className="flex-1 text-x-14">Highlight what GPM will pass</span>
+    </label>
   );
 }
 
@@ -58,6 +107,7 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
   const open = useExplorerStore((s) => s.panelOpen);
   const setOpen = useExplorerStore((s) => s.setPanelOpen);
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
+  const ready = useExplorerStore((s) => s.status === 'ready');
   return (
     <button
       ref={buttonRef}
@@ -66,48 +116,110 @@ function FiltersButton({ buttonRef }: { buttonRef: React.RefObject<HTMLButtonEle
       aria-controls="filter-panel"
       aria-label={active ? `Filters, ${active} applied` : 'Filters'}
       onClick={() => setOpen(!open)}
-      className="x-button pointer-events-auto flex items-center gap-2 rounded-full px-3 py-2 md:px-4"
+      disabled={!ready}
+      className="x-button shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
     >
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
-        <path d="M2 4h7M13 4h1M2 12h1M7 12h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        <circle cx="11" cy="4" r="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-        <circle cx="5" cy="12" r="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-      <span className="hidden text-[14px] md:inline">Filters</span>
-      {active > 0 && <span className="rounded-full bg-x-payload px-1.5 text-[11px] font-bold leading-[18px] text-x-void">{active}</span>}
+      <FiltersIcon />
+      Filters
+      {active > 0 && <span className="x-mono rounded-[4px] bg-x-accent px-1.5 text-x-12 font-bold text-x-bg">{active}</span>}
     </button>
   );
 }
 
-/** Counts of what is on screen, by type. Doubles as the colour legend. */
-function Stats() {
+/** What the globe shows, by type. Doubles as its colour key. */
+function CatalogKey({ filtersButton }: { filtersButton: React.RefObject<HTMLButtonElement | null> }) {
+  const ready = useExplorerStore((s) => s.status === 'ready');
   const byType = useExplorerStore((s) => s.visibleByType);
+  const visible = useExplorerStore((s) => s.visible);
   const active = useExplorerStore((s) => activeFilterCount(s.filters));
   const resetFilters = useExplorerStore((s) => s.resetFilters);
   return (
-    <div className="x-over-globe flex flex-col items-center gap-3">
-      <ul className="flex items-start justify-center gap-6 md:gap-12" aria-label="Objects shown, by type" aria-live="polite">
+    <section aria-labelledby="catalog-heading" className="border-t border-x-divider pt-6 md:border-t-0 md:pt-0 lg:border-t lg:pt-6">
+      <div className="flex items-center justify-between gap-4">
+        <h2 id="catalog-heading" className="x-display text-x-21">
+          On the globe
+        </h2>
+        <FiltersButton buttonRef={filtersButton} />
+      </div>
+      <div className="mt-4">
+        <FindBox />
+      </div>
+      <HighlightSwitch />
+      <ul className="mt-4" aria-label="Objects shown, by type">
         {OBJECT_TYPES.map((t) => (
-          <li key={t} className="flex flex-col items-center">
-            <span className="text-[21px] font-bold tabular-nums leading-none md:text-[36px]">{nf.format(byType[t])}</span>
-            <span className="mt-2 flex items-center gap-1.5 text-[12px] text-x-muted md:text-[14px]">
-              <span className="h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[t], boxShadow: `0 0 8px ${TYPE_COLOR[t]}` }} aria-hidden="true" />
-              {STAT_LABEL[t]}
-            </span>
+          <li key={t} className="flex min-h-8 items-center gap-3">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_INK[t] }} aria-hidden="true" />
+            <span className="flex-1 text-x-14">{TYPE_PLURAL[t]}</span>
+            {ready ? <span className="text-x-14">{nf.format(byType[t])}</span> : <span className="x-skeleton h-3 w-14" aria-hidden="true" />}
           </li>
         ))}
       </ul>
-      {active > 0 ? (
-        <p className="text-[12px] text-x-muted">
-          Filtered view.{' '}
-          <button type="button" onClick={resetFilters} className="x-focus pointer-events-auto rounded text-x-payload hover:underline">
-            Show everything
-          </button>
-        </p>
-      ) : (
-        <p className="hidden text-[11px] text-x-muted md:block">Orbital data from CelesTrak. Positions are SGP4 estimates.</p>
-      )}
+      <p className="mt-2 text-x-14 text-x-muted" aria-live="polite">
+        {!ready ? (
+          'Fetching orbital elements…'
+        ) : active > 0 ? (
+          <>
+            {nf.format(visible)} shown with filters.{' '}
+            <button type="button" onClick={resetFilters} className="x-link">
+              Show everything
+            </button>
+          </>
+        ) : (
+          `${nf.format(visible)} objects, each positioned live in your browser.`
+        )}
+      </p>
+    </section>
+  );
+}
+
+/** What the globe is doing while it has nothing (or nothing matching) to show. */
+function GlobeStatus() {
+  const status = useExplorerStore((s) => s.status);
+  const propagated = useExplorerStore((s) => s.propagated);
+  const sceneError = useExplorerStore((s) => s.sceneError);
+  const total = useExplorerStore((s) => s.objects.length);
+  const visible = useExplorerStore((s) => s.visible);
+  const resetFilters = useExplorerStore((s) => s.resetFilters);
+  let body: React.ReactNode = null;
+  if (sceneError) {
+    body = 'The 3D globe needs WebGL, which this browser can’t provide right now. Everything beside it still works.';
+  } else if (status === 'loading') {
+    body = 'Fetching orbital elements…';
+  } else if (status === 'error') {
+    body = 'The catalog didn’t load, so there is nothing to show yet.';
+  } else if (!propagated) {
+    body = `Propagating ${nf.format(total)} objects with SGP4…`;
+  } else if (visible === 0) {
+    body = (
+      <>
+        No objects match these filters.{' '}
+        <button type="button" onClick={resetFilters} className="x-link pointer-events-auto">
+          Reset filters
+        </button>
+      </>
+    );
+  }
+  if (!body) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+      <p className="x-fade-in max-w-[320px] rounded-[8px] bg-x-bg px-3 py-2 text-center text-x-14 text-x-muted" role={sceneError ? 'alert' : 'status'}>
+        {body}
+      </p>
     </div>
+  );
+}
+
+function DataCredit() {
+  const meta = useExplorerStore((s) => s.meta);
+  const retrieved = meta?.retrieved_at ? retrievedFormat.format(new Date(meta.retrieved_at)) : null;
+  return (
+    <p className="text-x-12 text-x-muted md:col-span-2">
+      Orbital elements from{' '}
+      <a href="https://celestrak.org" className="x-link" rel="noopener">
+        CelesTrak
+      </a>{' '}
+      GP data and SATCAT{retrieved ? `, retrieved ${retrieved} UTC` : ''}. Positions are SGP4 estimates, not telemetry.
+    </p>
   );
 }
 
@@ -116,74 +228,75 @@ export default function ExplorerPage() {
   const error = useExplorerStore((s) => s.error);
   const sceneError = useExplorerStore((s) => s.sceneError);
   const panelOpen = useExplorerStore((s) => s.panelOpen);
-  const hasSelection = useExplorerStore((s) => s.selected !== null);
   const load = useExplorerStore((s) => s.load);
+  const loadApproaches = useExplorerStore((s) => s.loadApproaches);
   const filtersButton = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
 
+  // The catalog and GPM's screening load side by side; the screening may take a while on a cold backend.
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadApproaches();
+  }, [load, loadApproaches]);
 
-  // Return focus to the Filters button when the filters page closes.
+  // The browser chrome matches the page on phones.
+  useEffect(() => {
+    const meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    meta.content = getComputedStyle(document.documentElement).getPropertyValue('--x-bg').trim() || '#0b0d10';
+    document.head.appendChild(meta);
+    return () => meta.remove();
+  }, []);
+
+  // Return focus to the Filters button when the filters sheet closes.
   useEffect(() => {
     if (wasOpen.current && !panelOpen) filtersButton.current?.focus();
     wasOpen.current = panelOpen;
   }, [panelOpen]);
 
   return (
-    <div className="explorer relative h-full w-full overflow-hidden bg-x-void font-b612 text-x-readout">
-      <GlobeCanvas />
+    <main className="explorer grid min-h-full bg-x-bg font-x-body text-x-text [grid-template-areas:'head'_'globe'_'body'] [grid-template-rows:auto_56svh_auto] lg:h-full lg:grid-cols-[minmax(360px,420px)_1fr] lg:[grid-template-areas:'head_globe'_'body_globe'] lg:[grid-template-rows:auto_1fr]">
+      <header inert={panelOpen} className="px-4 pb-6 pt-4 [grid-area:head] md:px-6 lg:border-r lg:border-x-divider lg:pt-6">
+        <SiteHeader />
+        <h1 className="x-display mt-8 text-x-28 lg:mt-10 2xl:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
+        <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
+        <a href="/mission" className="x-button x-button-primary mt-6 w-full sm:w-auto">
+          Plan an avoidance burn
+        </a>
+        <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
+      </header>
 
-      <div className="pointer-events-none absolute inset-0">
-        <header className="x-over-globe flex flex-col items-center px-4 pt-4 md:pt-5">
-          <SiteNav />
-          <h1 className="mt-4 text-[24px] font-bold leading-none tracking-[-0.02em] md:mt-5 md:text-[36px]">Aegis Orbit</h1>
-          <p className="mt-2 text-center text-[12px] text-x-muted md:text-[14px]">Every tracked object in Earth orbit, moving in real time</p>
-        </header>
+      <section inert={panelOpen} id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
+        <GlobeBoundary>
+          <Suspense fallback={null}>
+            <GlobeCanvas />
+          </Suspense>
+        </GlobeBoundary>
+        <UtcClock />
+        {status === 'ready' && !sceneError && <GlobeKey />}
+        <GlobeStatus />
+        {status === 'ready' && <DetailsCard />}
+      </section>
 
-        <div className="absolute left-5 top-6 hidden md:block">
-          <LiveClock />
-        </div>
-
-        {status === 'ready' && (
-          <>
-            <div className="absolute right-3 top-4 md:right-5 md:top-5">
-              <FiltersButton buttonRef={filtersButton} />
-            </div>
-            <div className={`absolute inset-x-0 bottom-5 px-4 md:bottom-6 ${hasSelection ? 'max-md:hidden' : ''}`}>
-              <Stats />
-            </div>
-            <DetailsCard />
-            <FilterPanel />
-          </>
-        )}
-
-        {status === 'loading' && (
-          <p className="absolute inset-x-0 top-1/2 text-center text-[14px] text-x-muted" role="status">
-            Loading the orbital catalog…
-          </p>
-        )}
-
+      <div inert={panelOpen} className="x-scroll flex flex-col gap-8 px-4 py-8 [grid-area:body] md:grid md:grid-cols-2 md:items-start md:gap-x-8 md:px-6 lg:flex lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
         {status === 'error' && (
-          <div className="x-panel pointer-events-auto absolute left-1/2 top-1/2 w-[min(440px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 p-5" role="alert">
-            <h2 className="text-[14px] font-bold">Can’t load the catalog from {API_BASE}</h2>
-            <p className="mt-2 text-[12px] text-x-muted">{error}</p>
-            <p className="mt-2 text-[12px] text-x-muted">
-              Start the backend with <code className="text-x-readout">uvicorn app.main:app --reload</code> in <code className="text-x-readout">backend/</code>, then retry.
+          <div className="x-panel p-4 md:col-span-2" role="alert">
+            <h2 className="text-x-16 font-bold">Can’t load the catalog from {API_BASE}</h2>
+            <p className="mt-2 text-x-14 text-x-muted">{error}</p>
+            <p className="mt-2 text-x-14 text-x-muted">
+              Start the backend with <code className="x-mono text-x-text">uvicorn app.main:app --reload</code> in <code className="x-mono text-x-text">backend/</code>, then retry.
             </p>
             <button type="button" onClick={() => void load()} className="x-button mt-4">
               Retry
             </button>
           </div>
         )}
-
-        {sceneError && (
-          <p className="absolute inset-x-6 top-1/2 text-center text-[14px] text-x-debris" role="alert">
-            The 3D globe couldn’t start, so WebGL may be unavailable in this browser: {sceneError}
-          </p>
-        )}
+        <Approaches />
+        {status !== 'error' && <CatalogKey filtersButton={filtersButton} />}
+        <DataCredit />
       </div>
-    </div>
+
+      {status === 'ready' && <FilterPanel />}
+    </main>
   );
 }
