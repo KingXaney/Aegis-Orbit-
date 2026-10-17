@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/public/cesium/
+frontend/.vite/
+
+# Environment / secrets
+.env
+.env.local
+*.local
+
+# Runtime caches (downloaded orbital data, sessions)
+data/cache/*
+!data/cache/.gitkeep
+data/sessions/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
