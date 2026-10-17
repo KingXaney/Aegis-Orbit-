@@ -3,6 +3,7 @@ import type { CatalogObject, CatalogObjectType, OrbitClass } from '../types/api'
 import { buildEarthTexture } from './earthTexture';
 import { MODEL_NORAD_ID } from './filters';
 import { readPalette, type Palette } from './palette';
+import type { OrbitPath } from './propagator.worker';
 import { STRIDE, gmst, temeToFixed } from './propagation';
 
 // Catalog globe. Every object is a point primitive positioned in TEME (metres); the point, polyline,
@@ -37,6 +38,27 @@ const INTRO_FADE_S = 0.5;
 const EARTH_FILL = 0.62;
 const EARTH_RADIUS_M = Cesium.Ellipsoid.WGS84.maximumRadius;
 const MAX_OPENING_LAT_DEG = 35;
+// Camera height above the closest-approach point when an approach is opened: both orbits and the
+// crossing stay in view.
+const APPROACH_VIEW_HEIGHT_M = 9e6;
+
+/** An approach drawn on the globe: the other object and where GPM will be at closest approach (TEME, km). */
+export interface SceneApproach {
+  index: number;
+  tcaTemeKm: [number, number, number];
+  label: string;
+}
+
+function toCartesians(points: Float32Array): Cesium.Cartesian3[] {
+  const out: Cesium.Cartesian3[] = [];
+  for (let k = 0; k < points.length; k += 3) out.push(new Cesium.Cartesian3(points[k] * 1000, points[k + 1] * 1000, points[k + 2] * 1000));
+  return out;
+}
+
+/** Ease-out cubic, for lines that draw themselves in. */
+function easeOut(x: number): number {
+  return 1 - (1 - x) ** 3;
+}
 
 function ringSprite(): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -62,6 +84,11 @@ export class ExplorerScene {
   private readonly pulseRings: Cesium.PointPrimitive[];
   private readonly markers: Cesium.BillboardCollection;
   private readonly paths: Cesium.PolylineCollection;
+  private readonly routes: Cesium.PolylineCollection;
+  private readonly tcaMarker: Cesium.Billboard;
+  private readonly approachRing: Cesium.Billboard;
+  private readonly approachLabel: Cesium.Label;
+  private readonly tcaLabel: Cesium.Label;
   private readonly labels: Cesium.LabelCollection;
   private readonly ring: Cesium.Billboard;
   private readonly hoverLabel: Cesium.Label;
@@ -80,6 +107,10 @@ export class ExplorerScene {
   private mask: Uint8Array = new Uint8Array(0);
   private selected: number | null = null;
   private hovered: number | null = null;
+  private approach: SceneApproach | null = null;
+  private routeLines: { line: Cesium.Polyline; positions: Cesium.Cartesian3[] }[] = [];
+  private revealStart: number | null = null;
+  private revealDuration = 0;
   private introStart: number | null = null;
   private introDelay: Float32Array = new Float32Array(0);
   private lastInteraction = -Infinity;
@@ -149,6 +180,7 @@ export class ExplorerScene {
     );
     this.points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
     this.paths = scene.primitives.add(new Cesium.PolylineCollection());
+    this.routes = scene.primitives.add(new Cesium.PolylineCollection());
     this.markers = scene.primitives.add(new Cesium.BillboardCollection({ scene }));
     this.labels = scene.primitives.add(new Cesium.LabelCollection({ scene }));
     this.ring = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), width: 30, height: 30, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
@@ -167,6 +199,10 @@ export class ExplorerScene {
     };
     this.hoverLabel = this.labels.add(labelOptions);
     this.selectedLabel = this.labels.add(labelOptions);
+    this.approachLabel = this.labels.add(labelOptions);
+    this.tcaLabel = this.labels.add({ ...labelOptions, fillColor: this.model });
+    this.approachRing = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), width: 30, height: 30, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
+    this.tcaMarker = this.markers.add({ position: new Cesium.Cartesian3(), image: ringSprite(), color: this.model, width: 24, height: 24, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY });
 
     this.removePreUpdate = scene.preUpdate.addEventListener(() => this.frame());
 
@@ -291,6 +327,7 @@ export class ExplorerScene {
     this.ring.show = index !== null && index !== this.modelIndex;
     this.selectedLabel.show = index !== null;
     if (index !== null) this.selectedLabel.text = this.objects[index].name;
+    this.approachLabel.show = this.approach !== null && this.approach.index !== index;
     this.hoverLabel.show = false;
     if (this.introStart === null) this.applyColors();
   }
@@ -309,6 +346,55 @@ export class ExplorerScene {
         material: Cesium.Material.fromType('Color', { color: this.baseColor(index).withAlpha(isSelected ? 0.95 : 0.3) }),
       });
     }
+  }
+
+  /**
+   * GPM's magenta line, plus the other object's orbit and the closest-approach marker while an approach
+   * is shown. New lines draw themselves in over `revealS` (instantly under reduced motion).
+   */
+  setRoute(paths: OrbitPath[], approach: SceneApproach | null, revealS: number): void {
+    this.routes.removeAll();
+    this.routeLines = [];
+    const reveal = this.reducedMotion ? 0 : revealS;
+    for (const { index, points } of paths) {
+      if (!this.objects[index] || points.length < 6) continue;
+      const positions = toCartesians(points);
+      const isModel = index === this.modelIndex;
+      const line = this.routes.add({
+        positions: reveal > 0 ? positions.slice(0, 2) : positions,
+        width: isModel ? 2 : 1.5,
+        material: Cesium.Material.fromType('Color', { color: this.baseColor(index).withAlpha(isModel ? 0.95 : 0.85) }),
+      });
+      this.routeLines.push({ line, positions });
+    }
+    this.revealStart = reveal > 0 ? performance.now() / 1000 : null;
+    this.revealDuration = reveal;
+
+    this.approach = approach;
+    const tca = approach ? new Cesium.Cartesian3(approach.tcaTemeKm[0] * 1000, approach.tcaTemeKm[1] * 1000, approach.tcaTemeKm[2] * 1000) : null;
+    this.tcaMarker.show = tca !== null;
+    this.tcaLabel.show = tca !== null;
+    this.approachRing.show = approach !== null;
+    this.approachLabel.show = approach !== null && approach.index !== this.selected;
+    if (approach && tca) {
+      this.tcaMarker.position = tca;
+      this.tcaLabel.position = tca;
+      this.tcaLabel.text = approach.label;
+      this.approachLabel.text = this.objects[approach.index]?.name ?? '';
+    }
+    if (this.introStart === null) this.applyColors();
+  }
+
+  /** Fly to look straight down on the shown approach's closest-approach point. */
+  focusApproach(): void {
+    const a = this.approach;
+    if (!a) return;
+    const dir = new Cesium.Cartesian3(a.tcaTemeKm[0], a.tcaTemeKm[1], a.tcaTemeKm[2]);
+    const radiusM = Cesium.Cartesian3.magnitude(dir) * 1000;
+    Cesium.Cartesian3.normalize(dir, dir);
+    Cesium.Matrix4.multiplyByPointAsVector(this.rotation, dir, dir);
+    this.viewer.camera.flyTo({ destination: Cesium.Cartesian3.multiplyByScalar(dir, radiusM + APPROACH_VIEW_HEIGHT_M, dir), duration: this.reducedMotion ? 0 : 1.4 });
+    this.onInteract();
   }
 
   /**
@@ -356,13 +442,15 @@ export class ExplorerScene {
     Cesium.Matrix4.clone(this.rotation, this.points.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.pulse.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.paths.modelMatrix);
+    Cesium.Matrix4.clone(this.rotation, this.routes.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.markers.modelMatrix);
     Cesium.Matrix4.clone(this.rotation, this.labels.modelMatrix);
 
     const t = performance.now() / 1000;
     const frameDt = Math.min(t - this.lastFrame, 0.25);
     this.lastFrame = t;
-    if (!this.reducedMotion && this.selected === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
+    if (this.revealStart !== null) this.stepReveal(t - this.revealStart);
+    if (!this.reducedMotion && this.selected === null && this.approach === null && t - this.lastInteraction > IDLE_BEFORE_ROTATE_S) {
       this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -ROTATE_RAD_S * frameDt);
     }
 
@@ -377,10 +465,21 @@ export class ExplorerScene {
     }
     if (this.introStart !== null) this.stepIntro(t - this.introStart);
     this.stepPulse(t, dt);
-    for (const [label, index] of [[this.hoverLabel, this.hovered], [this.selectedLabel, this.selected]] as const) {
+    const approachIndex = this.approach?.index ?? null;
+    for (const [label, index] of [[this.hoverLabel, this.hovered], [this.selectedLabel, this.selected], [this.approachLabel, approachIndex]] as const) {
       if (index !== null && label.show && this.temePosition(index, dt, pos)) label.position = pos;
     }
     if (this.selected !== null && this.temePosition(this.selected, dt, pos)) this.ring.position = pos;
+    if (approachIndex !== null && this.temePosition(approachIndex, dt, pos)) this.approachRing.position = pos;
+  }
+
+  private stepReveal(elapsed: number): void {
+    const done = elapsed >= this.revealDuration;
+    const share = done ? 1 : easeOut(elapsed / this.revealDuration);
+    for (const { line, positions } of this.routeLines) {
+      line.positions = done ? positions : positions.slice(0, Math.max(2, Math.ceil(share * positions.length)));
+    }
+    if (done) this.revealStart = null;
   }
 
   // ------------------------------------------------------------------ colour
@@ -448,12 +547,14 @@ export class ExplorerScene {
 
   /** With an object selected, everything else steps back so it reads clearly. */
   private applyColors(): void {
-    const dim = this.selected !== null;
+    // With an object selected or an approach shown, everything else steps back; GPM never does.
+    const approachIndex = this.approach?.index ?? null;
+    const dim = this.selected !== null || approachIndex !== null;
     for (let i = 0; i < this.dots.length; i++) {
       const b = this.dots[i];
       const c = Cesium.Color.clone(this.baseColor(i), this.scratchColor);
-      const isSelected = i === this.selected;
-      c.alpha = dim && !isSelected ? DIMMED_ALPHA * this.baseAlpha(i) : this.baseAlpha(i);
+      const isSelected = i === this.selected || i === approachIndex;
+      c.alpha = dim && !isSelected && i !== this.modelIndex ? DIMMED_ALPHA * this.baseAlpha(i) : this.baseAlpha(i);
       b.color = c;
       b.pixelSize = isSelected ? SELECTED_SIZE : this.baseSize(i);
     }

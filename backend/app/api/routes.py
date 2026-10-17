@@ -1,22 +1,25 @@
 """REST routes. Thin wrappers around the service layer."""
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 
 from .. import __version__
 from ..agent.orchestrator import run_analysis
 from ..config import get_settings
 from ..data import celestrak, explorer_catalog
 from ..scenarios.registry import list_scenarios
-from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproveRequest, CatalogRefreshResponse,
+from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproachesResponse, ApproveRequest,
+                              CatalogRefreshResponse,
                               CatalogResponse, DataRefreshResponse,
                               DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PlanRequest,
                               PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
                               ScreenResponse, SecondaryCheckRequest, SecondaryCheckResponse, SimulationState,
                               TrajectoryBatchRequest, TrajectoryBatchResponse, TrajectoryResponse)
-from ..simulation import service
+from ..simulation import explorer_screening, service
 from ..simulation.session import get_store
 
 router = APIRouter(prefix="/api")
@@ -184,6 +187,28 @@ def catalog():
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     # Serialised once per process; 25k+ rows are too many to re-validate on every request.
     return Response(content=body, media_type="application/json")
+
+
+@router.get("/catalog/approaches", response_model=ApproachesResponse,
+            responses={202: {"description": "Screening is running; retry after the Retry-After header"}})
+def catalog_approaches(response: Response):
+    """GPM's close approaches over the next 24 hours, screened against the explorer catalog.
+
+    Computed on a background thread and cached for half an hour, so the first request after startup may
+    get 202 while the screening runs.
+    """
+    try:
+        state = explorer_screening.get_approaches()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if state["status"] == "error":
+        raise HTTPException(status_code=503, detail=f"screening failed: {state['error']}")
+    if state["status"] == "computing":
+        return JSONResponse(status_code=202, content={"status": "computing", "retry_after_s": 3}, headers={"Retry-After": "3"})
+    result = state["result"]
+    now = time.time()
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {**result, "approaches": [a for a in result["approaches"] if a["tca_unix"] > now]}
 
 
 @router.post("/catalog/refresh", response_model=CatalogRefreshResponse)

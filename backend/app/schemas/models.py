@@ -392,5 +392,31 @@ class CatalogRefreshResponse(BaseModel):
     detail: str
 
 
+class ApproachRecord(BaseModel):
+    norad_id: int
+    name: str
+    type: str = Field(description="PAYLOAD | DEBRIS | ROCKET_BODY")
+    tca: str = Field(description="Time of closest approach, ISO 8601 UTC")
+    tca_unix: float
+    miss_distance_km: float
+    relative_speed_kms: float
+    primary_position_teme_km: List[float] = Field(description="GPM's TEME position at TCA")
+    secondary_position_teme_km: List[float]
+
+
+class ApproachesResponse(BaseModel):
+    primary_norad_id: int
+    primary_name: str
+    window_start: str
+    window_end: str
+    computed_at: str
+    compute_s: float
+    catalog_retrieved_at: Optional[str] = None
+    screened: int = Field(description="Objects screened against the primary")
+    screening_radius_km: float
+    approaches: List[ApproachRecord] = Field(description="Approaches still ahead, soonest first")
+    note: str
+
+
 ScenarioDetail.model_rebuild()
 AgentRunResponse.model_rebuild()

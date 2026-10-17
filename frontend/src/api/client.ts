@@ -1,5 +1,7 @@
 import type {
   AgentRun,
+  ApproachesPending,
+  ApproachesResponse,
   CatalogResponse,
   Conjunction,
   DecisionResponse,
@@ -61,6 +63,7 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
   catalog: () => request<CatalogResponse>('/api/catalog'),
+  catalogApproaches: () => request<ApproachesResponse | ApproachesPending>('/api/catalog/approaches'),
   scenarios: () => request<ScenarioSummary[]>('/api/scenarios'),
   scenario: (id: string) => request<ScenarioDetail>(`/api/scenarios/${encodeURIComponent(id)}`),
   resetScenario: (id: string, live = false) =>

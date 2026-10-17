@@ -137,7 +137,7 @@ input[type='range'].scrubber:focus-visible {
 
   --font-x-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --font-x-body: 'B612', 'Segoe UI', system-ui, sans-serif;
-  --font-x-mono: 'B612 Mono', ui-monospace, Menlo, monospace;
+  --font-x-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
 
   /* The classic typographic scale, 12 to 48. */
   --text-x-12: 12px;

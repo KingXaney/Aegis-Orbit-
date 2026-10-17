@@ -1,6 +1,8 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -8,15 +10,27 @@ from fastapi.middleware.gzip import GZipMiddleware
 from . import __version__
 from .api.routes import router
 from .config import get_settings
+from .simulation import explorer_screening
+
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Start GPM's screening for the home page in the background; startup doesn't wait for it.
+    if settings.explorer_prewarm:
+        explorer_screening.warm()
+    yield
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title="Orbital Collision Avoidance Simulator API",
     version=__version__,
     description=("Physics engine, screening, maneuver planning and AI-agent orchestration for an orbital collision "
                  "avoidance simulation. Research prototype; nothing here commands a spacecraft."),
 )
 
-settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

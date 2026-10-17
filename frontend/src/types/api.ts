@@ -437,3 +437,38 @@ export interface CatalogResponse {
   counts_by_type: Record<string, number>;
   objects: CatalogObject[];
 }
+
+/** GPM's close approach to one catalog object, from GET /api/catalog/approaches. */
+export interface ApproachRecord {
+  norad_id: number;
+  name: string;
+  type: CatalogObjectType;
+  tca: string;
+  tca_unix: number;
+  miss_distance_km: number;
+  relative_speed_kms: number;
+  /** GPM's TEME position at TCA (km). */
+  primary_position_teme_km: [number, number, number];
+  secondary_position_teme_km: [number, number, number];
+}
+
+export interface ApproachesResponse {
+  primary_norad_id: number;
+  primary_name: string;
+  window_start: string;
+  window_end: string;
+  computed_at: string;
+  compute_s: number;
+  catalog_retrieved_at: string | null;
+  screened: number;
+  screening_radius_km: number;
+  /** Approaches still ahead, soonest first. */
+  approaches: ApproachRecord[];
+  note: string;
+}
+
+/** 202 body while the backend is still screening. */
+export interface ApproachesPending {
+  status: 'computing';
+  retry_after_s: number;
+}

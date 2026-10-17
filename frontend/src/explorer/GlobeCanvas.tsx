@@ -1,9 +1,15 @@
-import { useEffect, useRef } from 'react';
-import { ExplorerScene } from './ExplorerScene';
+import { useEffect, useMemo, useRef } from 'react';
+import { ExplorerScene, type SceneApproach } from './ExplorerScene';
 import { MAX_PATHS } from './filters';
 import { STRIDE, altitudeKm, speedKms, subpoint } from './propagation';
-import type { WorkerIn, WorkerOut } from './propagator.worker';
-import { useExplorerStore } from './store';
+import type { OrbitItem, WorkerIn, WorkerOut } from './propagator.worker';
+import { approachKey, selectActiveApproach, useExplorerStore } from './store';
+
+const timeFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
+
+// The magenta line draws itself in once on load; an approach's orbits draw in faster.
+const FIRST_REVEAL_S = 1.2;
+const APPROACH_REVEAL_S = 0.6;
 
 /**
  * Hosts the Cesium viewer and the SGP4 worker. The scene (plain TypeScript) owns every
@@ -14,12 +20,19 @@ export default function GlobeCanvas() {
   const sceneRef = useRef<ExplorerScene | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const orbitRequest = useRef(0);
+  const routeRequest = useRef(0);
+  const routeMeta = useRef<{ approach: SceneApproach | null; revealS: number; fly: boolean }>({ approach: null, revealS: 0, fly: false });
+  const routeDrawn = useRef(false);
   const objects = useExplorerStore((s) => s.objects);
   const mask = useExplorerStore((s) => s.mask);
   const visible = useExplorerStore((s) => s.visible);
   const selected = useExplorerStore((s) => s.selected);
   const showPaths = useExplorerStore((s) => s.showPaths);
   const focusRequest = useExplorerStore((s) => s.focusRequest);
+  const modelIndex = useExplorerStore((s) => s.modelIndex);
+  const active = useExplorerStore(selectActiveApproach);
+  const pinned = useExplorerStore((s) => s.pinnedApproach);
+  const indexByNorad = useMemo(() => new Map(objects.map((o, i) => [o.norad_id, i])), [objects]);
 
   useEffect(() => {
     if (!containerRef.current || sceneRef.current) return;
@@ -69,6 +82,10 @@ export default function GlobeCanvas() {
         }
       } else if (msg.type === 'orbits' && msg.requestId === orbitRequest.current) {
         scene.setPaths(msg.paths);
+      } else if (msg.type === 'route' && msg.requestId === routeRequest.current) {
+        const { approach, revealS, fly } = routeMeta.current;
+        scene.setRoute(msg.paths, approach, revealS);
+        if (fly) scene.focusApproach();
       }
     };
     const init: WorkerIn = { type: 'init', tles: objects.map((o) => [o.tle1, o.tle2]) };
@@ -108,6 +125,28 @@ export default function GlobeCanvas() {
   useEffect(() => {
     if (focusRequest) sceneRef.current?.focus(focusRequest.index);
   }, [focusRequest]);
+
+  // GPM's orbit, the magenta line; with an approach shown, both orbits centred on the time of closest
+  // approach so they cross at the marker. A pinned (clicked) approach also turns the camera to it.
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker || modelIndex === null || !objects[modelIndex]) return;
+    const secondary = active ? (indexByNorad.get(active.norad_id) ?? null) : null;
+    const startFor = (periodMin: number) => (active ? active.tca_unix - periodMin * 30 : undefined);
+    const items: OrbitItem[] = [{ index: modelIndex, periodMin: objects[modelIndex].period_min, startUnix: startFor(objects[modelIndex].period_min) }];
+    if (secondary !== null) items.push({ index: secondary, periodMin: objects[secondary].period_min, startUnix: startFor(objects[secondary].period_min) });
+    routeMeta.current = {
+      approach:
+        active && secondary !== null
+          ? { index: secondary, tcaTemeKm: active.primary_position_teme_km, label: `${active.miss_distance_km.toFixed(2)} km at ${timeFormat.format(active.tca_unix * 1000)} UTC` }
+          : null,
+      revealS: routeDrawn.current ? (active ? APPROACH_REVEAL_S : 0) : FIRST_REVEAL_S,
+      fly: active !== null && pinned === approachKey(active),
+    };
+    routeDrawn.current = true;
+    const msg: WorkerIn = { type: 'route', requestId: ++routeRequest.current, items };
+    worker.postMessage(msg);
+  }, [objects, modelIndex, active, pinned, indexByNorad]);
 
   return <div ref={containerRef} className="absolute inset-0" aria-label="3D globe of tracked objects in orbit" />;
 }

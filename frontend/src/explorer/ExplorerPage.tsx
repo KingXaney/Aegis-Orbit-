@@ -1,9 +1,10 @@
 import '@fontsource/b612/400.css';
 import '@fontsource/b612/700.css';
-import '@fontsource/b612-mono/400.css';
+import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/barlow-condensed/600.css';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../api/client';
+import Approaches from './Approaches';
 import DetailsCard from './DetailsCard';
 import FilterPanel from './FilterPanel';
 import { OBJECT_TYPES, activeFilterCount } from './filters';
@@ -15,7 +16,6 @@ import { useExplorerStore } from './store';
 const GlobeCanvas = lazy(() => import('./GlobeCanvas'));
 
 const nf = new Intl.NumberFormat('en-US');
-const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const retrievedFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
 const clockFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' });
 
@@ -50,61 +50,23 @@ function UtcClock() {
   );
 }
 
-function formatLatLon(lat: number, lon: number): string {
-  return `${Math.abs(lat).toFixed(0)}°${lat < 0 ? 'S' : 'N'} ${Math.abs(lon).toFixed(0)}°${lon < 0 ? 'W' : 'E'}`;
-}
-
-/** GPM's live state: the spacecraft the whole product is about. */
-function ModelReadout() {
-  const live = useExplorerStore((s) => s.modelLive);
-  const modelIndex = useExplorerStore((s) => s.modelIndex);
-  const focus = useExplorerStore((s) => s.focus);
-  const values: [string, string | null][] = [
-    ['Altitude', live ? `${nf0.format(live.altitudeKm)} km` : null],
-    ['Speed', live ? `${live.speedKms.toFixed(2)} km/s` : null],
-    ['Over', live ? formatLatLon(live.latDeg, live.lonDeg) : null],
+/** The globe's colour key, on the globe. */
+function GlobeKey() {
+  const items: [string, string][] = [
+    ['var(--x-accent)', 'GPM and its orbit'],
+    [TYPE_INK.PAYLOAD, 'Active satellites'],
+    [TYPE_INK.DEBRIS, 'Debris'],
+    [TYPE_INK.ROCKET_BODY, 'Rocket bodies'],
   ];
   return (
-    <section aria-labelledby="model-heading">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 id="model-heading" className="x-display text-x-21">
-            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-x-accent align-middle" aria-hidden="true" />
-            GPM Core Observatory
-          </h2>
-          <p className="mt-1 text-x-14 text-x-muted">NASA and JAXA’s rain-measuring satellite, and the spacecraft the simulator flies.</p>
-        </div>
-        {modelIndex !== null && (
-          <button type="button" onClick={() => focus(modelIndex)} className="x-button shrink-0">
-            Show on globe
-          </button>
-        )}
-      </div>
-      <dl className="mt-4 grid grid-cols-3 gap-4">
-        {values.map(([label, value]) => (
-          <div key={label}>
-            <dt className="text-x-12 text-x-muted">{label}</dt>
-            <dd className="x-mono mt-1 text-x-16">{value ?? <span className="x-skeleton inline-block h-4 w-16 align-middle" aria-label="Computing" />}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-function PlanBurn() {
-  return (
-    <section aria-labelledby="plan-heading" className="border-t border-x-divider pt-6">
-      <h2 id="plan-heading" className="sr-only">
-        Plan an avoidance burn
-      </h2>
-      <a href="/mission" className="x-button x-button-primary w-full sm:w-auto">
-        Plan an avoidance burn
-      </a>
-      <p className="mt-3 text-x-14 text-x-muted">
-        The simulator runs the whole loop on a scripted encounter with a GPM stand-in: screen for close approaches, estimate the risk, plan a burn, and approve or reject it.
-      </p>
-    </section>
+    <ul className="pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-x-4 gap-y-1 rounded-[4px] bg-x-bg px-2 py-1 text-x-12 text-x-muted max-lg:right-4" aria-label="Colour key">
+      {items.map(([ink, label]) => (
+        <li key={label} className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full" style={{ background: ink }} aria-hidden="true" />
+          {label}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -188,12 +150,15 @@ export default function ExplorerPage() {
   const sceneError = useExplorerStore((s) => s.sceneError);
   const panelOpen = useExplorerStore((s) => s.panelOpen);
   const load = useExplorerStore((s) => s.load);
+  const loadApproaches = useExplorerStore((s) => s.loadApproaches);
   const filtersButton = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
 
+  // The catalog and GPM's screening load side by side; the screening may take a while on a cold backend.
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadApproaches();
+  }, [load, loadApproaches]);
 
   // The browser chrome matches the page on phones.
   useEffect(() => {
@@ -214,15 +179,20 @@ export default function ExplorerPage() {
     <main className="explorer grid min-h-full bg-x-bg font-x-body text-x-text [grid-template-areas:'head'_'globe'_'body'] [grid-template-rows:auto_56svh_auto] lg:h-full lg:grid-cols-[minmax(360px,420px)_1fr] lg:[grid-template-areas:'head_globe'_'body_globe'] lg:[grid-template-rows:auto_1fr]">
       <header className="px-4 pb-6 pt-4 [grid-area:head] md:px-6 lg:border-r lg:border-x-divider lg:pt-6">
         <SiteHeader />
-        <h1 className="x-display mt-8 text-x-28 lg:mt-12 lg:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
+        <h1 className="x-display mt-8 text-x-28 lg:mt-10 2xl:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
         <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
+        <a href="/mission" className="x-button x-button-primary mt-6 w-full sm:w-auto">
+          Plan an avoidance burn
+        </a>
+        <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
       </header>
 
-      <section aria-label="Live globe of tracked objects" className="relative min-h-[320px] overflow-hidden [grid-area:globe]">
+      <section id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
         <Suspense fallback={null}>
           <GlobeCanvas />
         </Suspense>
         <UtcClock />
+        {status === 'ready' && <GlobeKey />}
         {sceneError && (
           <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-x-14 text-x-muted" role="alert">
             The 3D globe couldn’t start because WebGL isn’t available in this browser ({sceneError}). Everything else on the page still works.
@@ -251,8 +221,7 @@ export default function ExplorerPage() {
         )}
         {status === 'ready' && (
           <>
-            <ModelReadout />
-            <PlanBurn />
+            <Approaches />
             <CatalogKey filtersButton={filtersButton} />
           </>
         )}

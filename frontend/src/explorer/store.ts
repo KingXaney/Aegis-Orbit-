@@ -1,12 +1,27 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
-import type { CatalogObject, CatalogObjectType, CatalogResponse, OrbitClass } from '../types/api';
+import type { ApproachRecord, ApproachesResponse, CatalogObject, CatalogObjectType, CatalogResponse, OrbitClass } from '../types/api';
 import { DEFAULT_FILTERS, MODEL_NORAD_ID, computeMask, ownerCounts, type Filters, type OwnerCount } from './filters';
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.status === 0 ? e.message : `${e.message} (HTTP ${e.status})`;
   return (e as Error)?.message ?? String(e);
 }
+
+/** Identifies an approach across refreshes of the list. */
+export function approachKey(a: ApproachRecord): string {
+  return `${a.norad_id}@${Math.round(a.tca_unix)}`;
+}
+
+export interface ApproachesState {
+  /** loading: first request; computing: the backend is still screening (polled); error: no data at all. */
+  status: 'loading' | 'computing' | 'ready' | 'error';
+  data: ApproachesResponse | null;
+  error: string | null;
+}
+
+const APPROACHES_REFRESH_MS = 10 * 60 * 1000;
+let approachesTimer: ReturnType<typeof setTimeout> | null = null;
 
 export interface LiveState {
   altitudeKm: number;
@@ -39,8 +54,15 @@ export interface ExplorerState {
   /** Set when a selection should also turn the camera toward the object (search results). */
   focusRequest: { index: number; nonce: number } | null;
   sceneError: string | null;
+  approaches: ApproachesState;
+  /** The approach drawn on the globe is the pinned one (clicked), else the previewed one (hovered or focused). */
+  pinnedApproach: string | null;
+  previewApproach: string | null;
 
   load: () => Promise<void>;
+  loadApproaches: () => Promise<void>;
+  setPreviewApproach: (key: string | null) => void;
+  togglePinnedApproach: (key: string) => void;
   toggleType: (t: CatalogObjectType) => void;
   toggleClass: (c: OrbitClass) => void;
   toggleOwner: (code: string) => void;
@@ -54,6 +76,13 @@ export interface ExplorerState {
   setLive: (live: LiveState | null) => void;
   setModelLive: (live: ModelLive | null) => void;
   setSceneError: (msg: string) => void;
+}
+
+/** The approach drawn on the globe: the pinned one, else the previewed one. */
+export function selectActiveApproach(s: ExplorerState): ApproachRecord | null {
+  const key = s.pinnedApproach ?? s.previewApproach;
+  if (!key || !s.approaches.data) return null;
+  return s.approaches.data.approaches.find((a) => approachKey(a) === key) ?? null;
 }
 
 export const useExplorerStore = create<ExplorerState>((set, get) => {
@@ -82,6 +111,9 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
     modelLive: null,
     focusRequest: null,
     sceneError: null,
+    approaches: { status: 'loading', data: null, error: null },
+    pinnedApproach: null,
+    previewApproach: null,
 
     load: async () => {
       set({ status: 'loading', error: null });
@@ -94,6 +126,30 @@ export const useExplorerStore = create<ExplorerState>((set, get) => {
         set({ status: 'error', error: errMsg(e) });
       }
     },
+    loadApproaches: async () => {
+      if (approachesTimer) clearTimeout(approachesTimer);
+      approachesTimer = null;
+      const again = (ms: number) => {
+        approachesTimer = setTimeout(() => void get().loadApproaches(), ms);
+      };
+      try {
+        const body = await api.catalogApproaches();
+        if ('status' in body) {
+          // Keep showing an older list while a refresh is screened.
+          if (!get().approaches.data) set({ approaches: { status: 'computing', data: null, error: null } });
+          again(Math.max(1, body.retry_after_s) * 1000);
+          return;
+        }
+        set({ approaches: { status: 'ready', data: body, error: null } });
+        again(APPROACHES_REFRESH_MS);
+      } catch (e) {
+        const data = get().approaches.data;
+        set({ approaches: data ? { status: 'ready', data, error: null } : { status: 'error', data: null, error: errMsg(e) } });
+        if (data) again(APPROACHES_REFRESH_MS);
+      }
+    },
+    setPreviewApproach: (previewApproach) => set({ previewApproach }),
+    togglePinnedApproach: (key) => set({ pinnedApproach: get().pinnedApproach === key ? null : key }),
     toggleType: (t) => {
       const f = get().filters;
       refilter({ ...f, types: { ...f.types, [t]: !f.types[t] } });
