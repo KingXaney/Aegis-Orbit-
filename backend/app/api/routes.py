@@ -151,10 +151,11 @@ def perception(scenario_id: str = Query(...),
                horizon_s: Optional[float] = Query(default=None, gt=0, le=7 * 86400),
                critical_radius_km: Optional[float] = Query(default=None, gt=0, le=100),
                tracked_radius_km: Optional[float] = Query(default=None, gt=0, le=200),
-               maneuver_id: Optional[str] = None, include_hidden: bool = False, trails: bool = True):
+               maneuver_id: Optional[str] = None, include_hidden: bool = False, trails: bool = True,
+               baseline: bool = Query(default=False, description="perceive along the original trajectory even after an approval")):
     """ML-ranked, physics-verified objects around the primary (the Waymo-style perception layer)."""
     return _call(service.perception, _session(scenario_id), horizon_s, critical_radius_km, tracked_radius_km,
-                 maneuver_id, include_hidden, trails)
+                 maneuver_id, include_hidden, trails, baseline)
 
 
 @router.get("/perception/model", response_model=PerceptionModelInfo)

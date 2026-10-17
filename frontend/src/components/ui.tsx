@@ -110,3 +110,20 @@ export function Details({ summary, children, open = false }: { summary: ReactNod
     </details>
   );
 }
+
+
+export function ViewFrame({ mini, label, onSwap, children }: { mini: boolean; label: string; onSwap: () => void; children: ReactNode }) {
+  return (
+    <div className="relative h-full w-full">
+      {children}
+      {mini && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-2 py-1">
+          <span className="rounded bg-panel/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted">{label}</span>
+          <button onClick={onSwap} className="pointer-events-auto rounded border border-line bg-panel/90 px-1.5 py-0.5 text-[10px] text-text hover:border-muted" title="Make this the main view" aria-label={`Show ${label} full size`}>
+            ⤢
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

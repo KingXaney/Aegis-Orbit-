@@ -10,11 +10,11 @@ export default defineConfig({
     chunkSizeWarningLimit: 4000,
     rollupOptions: {
       output: {
-        manualChunks: { cesium: ['cesium'], recharts: ['recharts'] },
+        manualChunks: { cesium: ['cesium'], recharts: ['recharts'], three: ['three'] },
       },
     },
   },
-  optimizeDeps: { include: ['cesium'] },
+  optimizeDeps: { include: ['cesium', 'three'] },
   test: {
     environment: 'jsdom',
     globals: true,

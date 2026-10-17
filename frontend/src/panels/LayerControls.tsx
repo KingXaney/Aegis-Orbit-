@@ -10,8 +10,9 @@ export default function LayerControls() {
   const scenario = useAppStore((s) => s.scenario);
 
   return (
-    <div className="pointer-events-auto w-[230px] rounded border border-line bg-panel/85 p-3 backdrop-blur">
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Camera</div>
+    <details className="pointer-events-auto w-[230px] rounded border border-line bg-panel/85 p-3 backdrop-blur">
+      <summary className="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Globe camera &amp; layers</summary>
+      <div className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Camera</div>
       <div className="mb-3 flex gap-1.5">
         <Button size="sm" variant={cameraMode === 'follow' ? 'primary' : 'secondary'} onClick={() => setCameraMode('follow')}>
           Follow
@@ -37,6 +38,6 @@ export default function LayerControls() {
         Markers, the spacecraft model and the danger region are enlarged for visibility. Dashed lines are predicted motion; solid trails are past motion.
         {scenario?.kind === 'real' ? ' Positions are SGP4 estimates from public elements, not sensor telemetry.' : ' States are synthetic.'}
       </p>
-    </div>
+    </details>
   );
 }

@@ -357,13 +357,13 @@ def reject(sess: SimulationSession, maneuver_id: str, reason: Optional[str] = No
 
 def perception(sess: SimulationSession, horizon_s: Optional[float] = None, critical_radius_km: Optional[float] = None,
                tracked_radius_km: Optional[float] = None, maneuver_id: Optional[str] = None,
-               include_hidden: bool = False, trails: bool = True) -> Dict[str, Any]:
+               include_hidden: bool = False, trails: bool = True, baseline: bool = False) -> Dict[str, Any]:
     if maneuver_id and maneuver_id not in sess.maneuvers:
         raise NotFound(f"maneuver '{maneuver_id}' not found in this session")
     try:
         return perceive(sess, horizon_s=horizon_s, critical_radius_km=critical_radius_km,
                         tracked_radius_km=tracked_radius_km, maneuver_id=maneuver_id, include_hidden=include_hidden,
-                        trails=trails, settings=get_settings())
+                        trails=trails, settings=get_settings(), baseline=baseline)
     except ValueError as exc:
         raise BadRequest(str(exc)) from exc
 

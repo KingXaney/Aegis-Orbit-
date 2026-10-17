@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
 import type { CameraMode, LayerFlags } from '../globe/scene';
 import { controller } from '../simulation/controller';
+import { normalizePerception } from '../encounter/encounters';
+
+export type EncounterMode = 'map' | 'chase';
+export type MainView = 'encounter' | 'globe';
 import type {
   AgentRun,
   Conjunction,
@@ -9,6 +13,7 @@ import type {
   Maneuver,
   ObjectDetail,
   ObjectSummary,
+  PerceptionSnapshot,
   PlanResponse,
   ScenarioDetail,
   ScenarioSummary,
@@ -68,6 +73,16 @@ export interface AppState {
   cameraMode: CameraMode;
   cameraResetNonce: number;
   notice: string | null;
+  perception: PerceptionSnapshot | null;
+  perceptionManeuvered: PerceptionSnapshot | null;
+  perceptionLoading: boolean;
+  perceptionError: string | null;
+  encounterTrajectories: Record<string, Trajectory>;
+  encounterMode: EncounterMode;
+  mainView: MainView;
+  encounterCameraResetNonce: number;
+  autoSlowNearTca: boolean;
+  showLegend: boolean;
 
   selectedConjunction: () => Conjunction | null;
   selectedManeuver: () => Maneuver | null;
@@ -90,6 +105,15 @@ export interface AppState {
   resetCamera: () => void;
   setSceneReady: (ok: boolean, error?: string) => void;
   dismissNotice: () => void;
+  fetchPerception: () => Promise<void>;
+  ensureTrajectories: (ids: string[]) => Promise<void>;
+  setEncounterMode: (mode: EncounterMode) => void;
+  setMainView: (view: MainView) => void;
+  swapMainView: () => void;
+  resetEncounterCamera: () => void;
+  selectEncounter: (objectId: string | null, conjunctionId: string | null) => void;
+  setAutoSlowNearTca: (on: boolean) => void;
+  toggleLegend: () => void;
 }
 
 const EMPTY_SESSION = {
@@ -106,7 +130,13 @@ const EMPTY_SESSION = {
   decisionError: null,
   selectedObjectId: null,
   objectDetail: null,
+  perception: null,
+  perceptionManeuvered: null,
+  perceptionError: null,
+  encounterTrajectories: {},
 } as const;
+
+let perceptionRequestId = 0;
 
 export const useAppStore = create<AppState>()((set, get) => ({
   backendStatus: 'checking',
@@ -145,6 +175,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   cameraMode: 'follow',
   cameraResetNonce: 0,
   notice: null,
+  perception: null,
+  perceptionManeuvered: null,
+  perceptionLoading: false,
+  perceptionError: null,
+  encounterTrajectories: {},
+  encounterMode: 'map',
+  mainView: 'encounter',
+  encounterCameraResetNonce: 0,
+  autoSlowNearTca: true,
+  showLegend: true,
 
   selectedConjunction: () => {
     const { screening, selectedConjunctionId } = get();
@@ -192,17 +232,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const approved = detail.simulation.approved_maneuver;
           const cid = approved?.conjunction_id ?? first;
           if (cid) {
-            try {
-              const plan = await api.existingPlan(id, cid);
-              await hydratePlan(set, get, plan, approved?.maneuver_id ?? null);
-            } catch {
-              /* no plan yet */
+            if (approved || detail.simulation.agent_run_count > 0) {
+              try {
+                const plan = await api.existingPlan(id, cid);
+                await hydratePlan(set, get, plan, approved?.maneuver_id ?? null);
+              } catch {
+                /* no plan yet */
+              }
             }
           }
         } catch {
           /* screening results unavailable */
         }
       }
+      void get().fetchPerception();
     } catch (e) {
       set({ scenarioLoading: false, scenarioError: errMsg(e), objects: {}, trajectories: {} });
     }
@@ -217,6 +260,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       controller.setWindow(detail.window.start_unix, detail.window.end_unix);
       controller.reset();
       set({ scenario: detail, simulation: detail.simulation, scenarioLoading: false, notice: 'Scenario reset to its initial state.' });
+      void get().fetchPerception();
     } catch (e) {
       set({ scenarioLoading: false, scenarioError: errMsg(e) });
     }
@@ -257,6 +301,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         selectedManeuverId: keepPlan ? get().selectedManeuverId : null,
         candidateTrajectories: keepPlan ? get().candidateTrajectories : {},
       });
+      void get().fetchPerception();
     } catch (e) {
       set({ screeningLoading: false, screeningError: errMsg(e), screening: null, selectedConjunctionId: null });
     }
@@ -337,6 +382,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         /* nothing screened */
       }
       set({ agentLoading: false });
+      void get().fetchPerception();
     } catch (e) {
       set({ agentLoading: false, agentError: errMsg(e) });
     }
@@ -354,6 +400,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         candidateTrajectories = { ...candidateTrajectories, [maneuverId]: t };
       }
       set({ simulation: res.simulation, secondaryChecks: checks, candidateTrajectories, selectedManeuverId: maneuverId, decisionLoading: false });
+      void get().fetchPerception();
     } catch (e) {
       set({ decisionLoading: false, decisionError: errMsg(e) });
     }
@@ -365,6 +412,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       const res = await api.reject(scenarioId, maneuverId, reason);
       set({ simulation: res.simulation, decisionLoading: false });
+      void get().fetchPerception();
     } catch (e) {
       set({ decisionLoading: false, decisionError: errMsg(e) });
     }
@@ -375,6 +423,53 @@ export const useAppStore = create<AppState>()((set, get) => ({
   resetCamera: () => set({ cameraResetNonce: get().cameraResetNonce + 1 }),
   setSceneReady: (ok, error) => set({ sceneReady: ok, sceneError: error ?? null }),
   dismissNotice: () => set({ notice: null }),
+
+  fetchPerception: async () => {
+    const { scenarioId, scenario } = get();
+    if (!scenario) return;
+    const requestId = ++perceptionRequestId;
+    set({ perceptionLoading: true });
+    const approved = get().simulation?.approved_maneuver_id ?? null;
+    const [base, maneuvered] = await Promise.allSettled([api.perception(scenarioId, null, true), approved ? api.perception(scenarioId, approved) : Promise.resolve(null)]);
+    if (requestId !== perceptionRequestId || get().scenarioId !== scenarioId) return;
+    if (base.status === 'fulfilled') {
+      const snap = normalizePerception(base.value);
+      const after = maneuvered.status === 'fulfilled' && maneuvered.value ? normalizePerception(maneuvered.value) : null;
+      set({ perception: snap, perceptionManeuvered: after, perceptionError: null, perceptionLoading: false });
+      const ids = (snap?.objects ?? []).filter((o) => o.tier !== 'HIDDEN').map((o) => o.object_id);
+      void get().ensureTrajectories(ids);
+    } else {
+      const msg = errMsg(base.reason);
+      set({ perception: null, perceptionManeuvered: null, perceptionError: msg, perceptionLoading: false });
+      if (!get().notice) set({ notice: `Perception unavailable (${msg}); the encounter view uses the screening results.` });
+    }
+  },
+
+  ensureTrajectories: async (ids) => {
+    const { scenarioId, scenario, trajectories, encounterTrajectories } = get();
+    if (!scenario) return;
+    const missing = Array.from(new Set(ids)).filter((id) => !trajectories[id] && !encounterTrajectories[id]);
+    if (missing.length === 0) return;
+    try {
+      const step = scenario.kind === 'real' ? 120 : 60;
+      const { trajectories: fetched } = await api.trajectories(scenarioId, missing.slice(0, 200), step);
+      if (get().scenarioId !== scenarioId) return;
+      set({ encounterTrajectories: { ...get().encounterTrajectories, ...byId(fetched ?? []) } });
+    } catch (e) {
+      set({ notice: `Could not load trajectories for nearby objects: ${errMsg(e)}` });
+    }
+  },
+
+  setEncounterMode: (mode) => set({ encounterMode: mode }),
+  setMainView: (view) => set({ mainView: view }),
+  swapMainView: () => set({ mainView: get().mainView === 'encounter' ? 'globe' : 'encounter' }),
+  resetEncounterCamera: () => set({ encounterCameraResetNonce: get().encounterCameraResetNonce + 1 }),
+  selectEncounter: (objectId, conjunctionId) => {
+    if (objectId) get().selectObject(objectId);
+    if (conjunctionId && get().screening?.conjunctions.some((c) => c.conjunction_id === conjunctionId)) set({ selectedConjunctionId: conjunctionId });
+  },
+  setAutoSlowNearTca: (on) => set({ autoSlowNearTca: on }),
+  toggleLegend: () => set({ showLegend: !get().showLegend }),
 }));
 
 async function hydratePlan(

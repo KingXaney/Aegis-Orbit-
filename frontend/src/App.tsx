@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import GlobeView from './globe/GlobeView';
+import EncounterView from './encounter/EncounterView';
+import EncounterControls from './encounter/EncounterControls';
 import LayerControls from './panels/LayerControls';
 import MissionPanel from './panels/MissionPanel';
 import ObjectInspector from './panels/ObjectInspector';
@@ -7,7 +9,10 @@ import TimelineBar from './panels/TimelineBar';
 import TopBar from './panels/TopBar';
 import { controller } from './simulation/controller';
 import { useAppStore } from './store/useAppStore';
-import { Button, Spinner } from './components/ui';
+import { Button, Spinner, ViewFrame } from './components/ui';
+
+const STAGE = 'absolute inset-0';
+const MINI = 'absolute bottom-[92px] left-3 z-10 hidden h-[210px] w-[300px] overflow-hidden rounded border border-line bg-bg shadow-lg md:block';
 
 export default function App() {
   const init = useAppStore((s) => s.init);
@@ -20,6 +25,8 @@ export default function App() {
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const loadScenario = useAppStore((s) => s.loadScenario);
   const scenarioId = useAppStore((s) => s.scenarioId);
+  const mainView = useAppStore((s) => s.mainView);
+  const swapMainView = useAppStore((s) => s.swapMainView);
 
   useEffect(() => {
     void init();
@@ -39,6 +46,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Chase mode: hold 1x speed within two minutes of the critical closest approach so the pass is watchable.
+    let restore: number | null = null;
+    const unsub = controller.subscribe((st) => {
+      const { encounterMode, autoSlowNearTca, perception, screening } = useAppStore.getState();
+      if (encounterMode !== 'chase' || !autoSlowNearTca) return;
+      const critical = perception?.objects.find((o) => o.tier === 'CRITICAL' && o.physics.tca_unix !== null)?.physics.tca_unix
+        ?? screening?.conjunctions.find((c) => c.threat_state === 'CRITICAL')?.tca_unix ?? null;
+      if (critical === null) return;
+      const near = Math.abs(critical - st.currentUnix) < 120;
+      if (near && st.playing && st.speed > 1) {
+        restore = st.speed;
+        controller.setSpeed(1);
+      } else if (!near && restore !== null && st.speed === 1) {
+        controller.setSpeed(restore);
+        restore = null;
+      }
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
     if (!notice) return;
     const t = setTimeout(dismissNotice, 5000);
     return () => clearTimeout(t);
@@ -47,11 +75,23 @@ export default function App() {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg lg:flex-row">
       <div className="relative h-[55vh] min-h-[320px] w-full lg:h-full lg:min-h-0 lg:flex-1">
-        <GlobeView />
+        <div className={mainView === 'encounter' ? STAGE : MINI}>
+          <ViewFrame mini={mainView !== 'encounter'} label="Encounter" onSwap={swapMainView}>
+            <EncounterView mini={mainView !== 'encounter'} />
+          </ViewFrame>
+        </div>
+        <div className={mainView === 'globe' ? STAGE : MINI}>
+          <ViewFrame mini={mainView !== 'globe'} label="Globe" onSwap={swapMainView}>
+            <GlobeView mini={mainView !== 'globe'} />
+          </ViewFrame>
+        </div>
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
           <div className="flex items-start justify-between gap-3">
             <TopBar />
-            <ObjectInspector />
+            <div className="flex flex-col items-end gap-2">
+              <EncounterControls />
+              <ObjectInspector />
+            </div>
           </div>
           <div className="flex items-end gap-3">
             <div className="hidden md:block">

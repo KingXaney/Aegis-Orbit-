@@ -68,6 +68,7 @@ export class GlobeScene {
   private approvedCandidateId: string | null = null;
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true };
   private cameraMode: CameraMode = 'follow';
+  private mini = false;
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
@@ -207,7 +208,7 @@ export class GlobeScene {
       backgroundColor: Cesium.Color.fromCssColorString('#0b1220').withAlpha(0.7),
       backgroundPadding: new Cesium.Cartesian2(5, 3),
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      show: new Cesium.CallbackProperty(() => this.layers.labels, false),
+      show: new Cesium.CallbackProperty(() => this.layers.labels && !this.mini, false),
       scaleByDistance: new Cesium.NearFarScalar(1e5, 1.0, 2e7, 0.7),
     };
   }
@@ -479,6 +480,14 @@ export class GlobeScene {
   setCameraMode(mode: CameraMode): void {
     this.cameraMode = mode;
     this.applyCameraMode();
+  }
+
+  /** Minimap mode: cheaper rendering, no labels, no scroll zoom. */
+  setMiniMode(mini: boolean): void {
+    this.mini = mini;
+    this.viewer.resolutionScale = mini ? 0.75 : 1;
+    this.viewer.targetFrameRate = mini ? 20 : 60;
+    this.viewer.scene.screenSpaceCameraController.enableZoom = !mini;
   }
 
   private applyCameraMode(): void {

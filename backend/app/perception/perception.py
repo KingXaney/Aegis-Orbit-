@@ -55,12 +55,17 @@ def critical_tier(c: Conjunction, critical_km: float) -> bool:
     return c.miss_distance_km < critical_km
 
 
-def resolve_primary_variant(sess, maneuver_id: Optional[str], start_unix: float, end_unix: float):
-    """(kind, candidate, segments[(primary_object, t_start, t_end)]) for the trajectory to perceive along."""
+def resolve_primary_variant(sess, maneuver_id: Optional[str], start_unix: float, end_unix: float, baseline: bool = False):
+    """(kind, candidate, segments[(primary_object, t_start, t_end)]) for the trajectory to perceive along.
+
+    ``baseline=True`` forces the original (un-maneuvered) trajectory even when a maneuver is approved,
+    so a client can compare the two."""
     scen = sess.scenario
     primary = scen.catalog.require(scen.primary_id)
     cand = None
     kind = "ORIGINAL"
+    if baseline:
+        return kind, None, [(primary, start_unix, end_unix)]
     if maneuver_id:
         cand = sess.maneuvers.get(maneuver_id)
         if cand is None:
@@ -208,7 +213,8 @@ def _trail(pobj: OrbitalObject, sec: OrbitalObject, center: float, half_width_s:
 
 def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Optional[float] = None,
              tracked_radius_km: Optional[float] = None, maneuver_id: Optional[str] = None, include_hidden: bool = False,
-             trails: bool = True, settings: Optional[Settings] = None, model: Optional[RiskModel] = None) -> Dict[str, Any]:
+             trails: bool = True, settings: Optional[Settings] = None, model: Optional[RiskModel] = None,
+             baseline: bool = False) -> Dict[str, Any]:
     settings = settings or get_settings()
     scen = sess.scenario
     catalog = scen.catalog
@@ -218,13 +224,13 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
     if critical > tracked:
         raise ValueError(f"critical radius {critical:g} km must not exceed the tracked radius {tracked:g} km")
     hz = horizon_for(scen, primary, horizon_s, settings)
-    kind, cand, segments = resolve_primary_variant(sess, maneuver_id, hz["start_unix"], hz["end_unix"])
+    kind, cand, segments = resolve_primary_variant(sess, maneuver_id, hz["start_unix"], hz["end_unix"], baseline=baseline)
     model = model or load_risk_model(settings.perception_model_meta_file)
     watch_thr = settings.perception_ml_watch_threshold
     if watch_thr is None and model.info.status == "LOADED":
         watch_thr = model.info.threshold if model.info.threshold is not None else 0.5
     pc_policy = sess.screening_pc_policy or scen.pc_policy
-    key = (kind, cand.maneuver_id if cand else None, round(hz["horizon_s"], 3), critical, tracked, watch_thr,
+    key = (kind, cand.maneuver_id if cand else None, baseline, round(hz["horizon_s"], 3), critical, tracked, watch_thr,
            include_hidden, trails, model.info.model_version, model.info.library, pc_policy)
     cached = sess.perception_cache.get(key)
     if cached is not None:

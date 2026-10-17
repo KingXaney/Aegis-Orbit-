@@ -75,12 +75,16 @@ export default function TimelineBar() {
           <span className="mono">{formatUtc(sim.endUnix, false)}</span>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-4">
-        <div>
+      <div className="flex shrink-0 items-center gap-3">
+        <div className="hidden xl:block">
           <div className="text-[9px] uppercase tracking-wider text-dim">Simulation time</div>
           <div className="mono text-xs text-text">{formatUtc(sim.currentUnix)}</div>
         </div>
-        <div className="w-[108px]">
+        <div className="xl:hidden">
+          <div className="text-[9px] uppercase tracking-wider text-dim">Sim time</div>
+          <div className="mono text-xs text-text">{formatUtc(sim.currentUnix, false)}</div>
+        </div>
+        <div className="w-[96px]">
           <div className="text-[9px] uppercase tracking-wider text-dim">To closest approach</div>
           <div className={`mono text-xs ${tToTca !== null && tToTca > 0 && tToTca < 900 ? 'text-threat' : 'text-text'}`}>{tToTca === null ? '—' : formatCountdown(tToTca)}</div>
         </div>
