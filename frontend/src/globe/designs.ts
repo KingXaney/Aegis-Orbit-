@@ -13,7 +13,7 @@ export type Axis = 'x' | 'y' | 'z';
 
 export type PartColor =
   | 'module' | 'truss' | 'radiator' | 'issArray' | 'array' | 'mli' | 'antenna' | 'stage' | 'nozzle' | 'debris' | 'debrisDark'
-  | 'cell' | 'panelFrame' | 'panelBack' | 'mliSilver' | 'deck' | 'baffle' | 'lens' | 'hinge';
+  | 'cell' | 'panelFrame' | 'mliSilver' | 'deck' | 'baffle' | 'lens' | 'hinge';
 
 export type Part =
   | { kind: 'box'; center: Vec3; size: Vec3; color: PartColor }
@@ -34,7 +34,6 @@ export const PART_COLORS: Record<PartColor, string> = {
   debrisDark: '#64748b',
   cell: '#14245c', // triple-junction cells
   panelFrame: '#aeb4bf',
-  panelBack: '#e8e6df',
   mliSilver: '#c9ccd3',
   deck: '#9aa1ab',
   baffle: '#16181d',
@@ -88,19 +87,22 @@ function boxWingBus(L: number, W: number, H: number): Part[] {
   const top = bottom + busZ;
   const zc = (bottom + top) / 2;
   const m = Math.min(busX, busY); // reference size for bus-mounted hardware
+  const deckT = 0.02 * busZ;
   const parts: Part[] = [
-    box([0, 0, zc], [busX, busY, busZ], 'mli'),
-    box([0, 0, top - 0.01 * busZ], [busX * 1.001, busY * 1.001, 0.02 * busZ], 'mliSilver'), // zenith deck edge
-    box([0, 0, bottom + 0.01 * busZ], [busX * 1.001, busY * 1.001, 0.02 * busZ], 'deck'), // nadir deck
+    // Structure decks top and bottom with the MLI-wrapped body between them, inset so no two
+    // parts share a face (shared faces z-fight).
+    box([0, 0, top - deckT / 2], [busX, busY, deckT], 'mliSilver'),
+    box([0, 0, bottom + deckT / 2], [busX, busY, deckT], 'deck'),
+    box([0, 0, zc], [0.98 * busX, 0.98 * busY, busZ - 2 * deckT], 'mli'),
   ];
   // radiators on the fore/aft faces
   for (const fore of [1, -1]) {
-    parts.push(box([fore * (busX / 2 + 0.01 * L), 0, zc], [0.02 * L, 0.8 * busY, 0.75 * busZ], 'radiator'));
+    parts.push(box([fore * (busX / 2 + 0.01 * L), 0, zc], [0.02 * L, 0.8 * busY, 0.7 * busZ], 'radiator'));
   }
-  // aft thrusters at the four corners of the aft face
+  // aft thrusters at the four corners of the aft face, clear of the radiator
   for (const y of [1, -1]) {
     for (const z of [1, -1]) {
-      parts.push(cyl([-busX / 2 - 0.02 * L, y * 0.38 * busY, zc + z * 0.38 * busZ], 'x', 0.04 * L, 0.025 * m, 'nozzle', 0.05 * m));
+      parts.push(cyl([-busX / 2 - 0.02 * L, y * 0.43 * busY, zc + z * 0.43 * busZ], 'x', 0.04 * L, 0.025 * m, 'nozzle', 0.05 * m));
     }
   }
   // nadir instrument: telescope barrel with a dark aperture
@@ -139,15 +141,14 @@ function boxWingBus(L: number, W: number, H: number): Part[] {
       const y0 = root + yoke + gap / 2 + i * (panelSpan + gap);
       const yc = side * (y0 + panelSpan / 2);
       parts.push(box([0, yc, zc], [panelX, panelSpan, t], 'panelFrame'));
-      parts.push(box([0, yc, zc - 0.25 * t], [0.98 * panelX, 0.98 * panelSpan, 0.5 * t], 'panelBack'));
-      // cells on the sun face, with frame showing between them
+      // cells on the sun face, standing clear of the substrate, which shows between them
       const pitchX = (0.96 * panelX) / cellsX;
       const pitchY = (0.94 * panelSpan) / cellsY;
       for (let cx = 0; cx < cellsX; cx++) {
         for (let cy = 0; cy < cellsY; cy++) {
           parts.push(box(
-            [-0.48 * panelX + (cx + 0.5) * pitchX, yc - side * 0.47 * panelSpan + side * (cy + 0.5) * pitchY, zc + 0.5 * t + 0.05 * t],
-            [0.92 * pitchX, 0.9 * pitchY, 0.1 * t],
+            [-0.48 * panelX + (cx + 0.5) * pitchX, yc - side * 0.47 * panelSpan + side * (cy + 0.5) * pitchY, zc + 0.5 * t + 0.125 * t],
+            [0.92 * pitchX, 0.9 * pitchY, 0.25 * t],
             'cell',
           ));
         }
