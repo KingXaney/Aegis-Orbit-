@@ -76,7 +76,7 @@ See [`.env.example`](.env.example). Backend variables are read from `.env` in th
 | Variable | Default | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | empty | Enables the Gemini agent. Never sent to the browser. Empty → deterministic fallback agent. |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used for tool calling. |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model used for tool calling (`gemini-2.5-flash` is no longer served to new API keys). |
 | `AGENT_MODE` | `auto` | `auto` (Gemini if a key exists), `gemini`, or `deterministic`. |
 | `ALLOW_NETWORK` | `true` | Set `false` for fully offline use (CelesTrak refresh disabled). |
 | `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached (git-ignored). |
