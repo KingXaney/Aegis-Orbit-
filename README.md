@@ -18,7 +18,7 @@ environment.
 4. Computes collision probability with the 2-D encounter-plane (Foster) method **only when covariance inputs exist**; otherwise reports `UNVERIFIED`.
 5. Plans candidate maneuvers with a documented grid search and objective (delta-v cost vs. risk reduction).
 6. Re-screens every candidate's post-burn trajectory against the catalog (secondary screening).
-7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
+7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs. An overloaded model is retried; a model that cannot serve the run (quota, outage) is replaced by the next configured one, and the deterministic agent is the last resort, with the reason shown in the run's warnings.
 8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed. On the real ISS scenario the mission page plays it as a funnel over the full 18,598-object catalog and ends in an operator decision (see Scenario A).
 9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
 10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path. Each committed burn leaves a translucent **ghost** of the spacecraft flying the course it did not take until the pass the burn avoided; the close-up follows a ghost on request, the clock slows down before its collision and a warning shows what would have happened (with the true miss distance).
@@ -77,6 +77,7 @@ See [`.env.example`](.env.example). Backend variables are read from `.env` in th
 |---|---|---|
 | `GEMINI_API_KEY` | empty | Enables the Gemini agent. Never sent to the browser. Empty → deterministic fallback agent. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model used for tool calling (`gemini-2.5-flash` is no longer served to new API keys). |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview` | Tried in order when the model above cannot serve a run (daily quota, outage, retired model); after the last one the deterministic agent completes the run. |
 | `AGENT_MODE` | `auto` | `auto` (Gemini if a key exists), `gemini`, or `deterministic`. |
 | `ALLOW_NETWORK` | `true` | Set `false` for fully offline use (CelesTrak refresh disabled). |
 | `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached (git-ignored). |
@@ -267,7 +268,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Single-user in-memory sessions; restarting the backend clears screenings, plans, decisions, spawned junk and committed burns (the scenario definitions are deterministic and reload identically).
 * The sandbox autopilot works with the same grid planner: with little warning only large burns (up to 5 m/s) clear the 5 km target, so a piece dropped minutes ahead costs far more Δv than a real operator would spend, or is reported as unavoidable. The backend has no clock of its own; the browser sends the simulation time with every sandbox call.
 * A ghost's "collision" is the screened pre-burn closest approach, typically a few hundred metres; no physical impact is modelled and the number is always shown.
-* The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline.
+* The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline. A free-tier key allows 20 requests per day per model and one agent run is five to seven requests, so a free key gives two or three live runs a day before the fallback chain takes over; enable billing on the key for a demo.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
 
 ## Data attribution
