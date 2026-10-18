@@ -153,7 +153,7 @@ describe('agent model setting', () => {
     useAppStore.setState({ scenarioId: 'synthetic-conjunction', selectedConjunctionId: null });
     expect(useAppStore.getState().agentMode).toBe('gemini');
     await useAppStore.getState().runAgent();
-    expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined, 'gemini');
+    expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined, 'auto');
     useAppStore.getState().setAgentMode('deterministic');
     await useAppStore.getState().runAgent();
     expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined, 'deterministic');

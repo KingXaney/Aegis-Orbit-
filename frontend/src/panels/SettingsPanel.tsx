@@ -4,7 +4,7 @@ import { useAppStore, type AgentMode } from '../store/useAppStore';
 export const SETTINGS_PANEL_ID = 'settings-panel';
 
 const AGENT_OPTIONS: { mode: AgentMode; label: string; detail: string }[] = [
-  { mode: 'gemini', label: 'Gemini', detail: 'Chooses which tools to call and writes the explanation. The backend validates its recommendation.' },
+  { mode: 'gemini', label: 'Gemini', detail: 'Chooses which tools to call and writes the explanation. The backend validates its recommendation. If Gemini is out of quota or busy, the deterministic agent takes over and says so.' },
   { mode: 'deterministic', label: 'Deterministic', detail: 'Runs the same tool workflow from fixed rules and writes a templated explanation. Works offline.' },
 ];
 

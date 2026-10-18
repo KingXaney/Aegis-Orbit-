@@ -52,8 +52,24 @@ class Settings(BaseSettings):
     # --- Agent -------------------------------------------------------------
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3.8-flash"
-    agent_mode: str = "gemini"  # gemini | deterministic | auto; the UI settings can override it per run
+    # Tried in order when the model above cannot serve a run (daily quota, outage, retired model). Empty disables.
+    gemini_fallback_models: str = "gemini-3-flash-preview"
+    # Retries per model on a transient error (a 503, or a 429 with a short retry hint), with 2 s, 4 s, ... backoff.
+    gemini_retry_attempts: int = 2
+    gemini_retry_base_s: float = 2.0
+    # auto: Gemini with the fallback chain, then deterministic | gemini: strict | deterministic. The UI picks per run.
+    agent_mode: str = "auto"
     agent_max_tool_calls: int = 16
+
+    @property
+    def gemini_model_chain(self) -> list[str]:
+        """The configured model followed by its fallbacks, in order, without repeats."""
+        out: list[str] = []
+        for m in [self.gemini_model] + self.gemini_fallback_models.split(","):
+            m = m.strip()
+            if m and m not in out:
+                out.append(m)
+        return out
 
     # --- Data --------------------------------------------------------------
     allow_network: bool = True

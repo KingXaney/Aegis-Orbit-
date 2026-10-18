@@ -602,7 +602,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const { scenarioId, selectedConjunctionId, agentMode } = get();
     set({ agentLoading: true, agentError: null });
     try {
-      const run = await api.analyze(scenarioId, selectedConjunctionId ?? undefined, agentMode);
+      // "Gemini" in Settings is a preference: the backend's auto mode tries the Gemini models, then falls
+      // back to the deterministic agent (an explicit "gemini" would turn a quota or outage into an error)
+      const run = await api.analyze(scenarioId, selectedConjunctionId ?? undefined, agentMode === 'gemini' ? 'auto' : agentMode);
       set({ agentRun: run, simulation: run.simulation });
       // The agent may have screened and planned; pull those artefacts into the UI.
       try {

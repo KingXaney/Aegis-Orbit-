@@ -77,10 +77,16 @@ def run_analysis(sess: SimulationSession, conjunction_id: Optional[str] = None, 
            "model": None, "status": "RUNNING", "started_at": _now(), "finished_at": None, "tool_calls": [],
            "report": None, "validation": {"status": "PENDING", "checks": []}, "narrative": "", "warnings": warnings}
     registry = ToolRegistry(sess, max_candidates=max_candidates)
+    forced_gemini = (mode or get_settings().agent_mode or "auto").lower() == "gemini"
     try:
         if provider == "gemini":
-            run["model"] = get_settings().gemini_model
-            _run_gemini(sess, registry, conjunction_id, run)
+            outage = _run_gemini_chain(sess, registry, conjunction_id, run)
+            if outage is not None:
+                if forced_gemini:  # an explicit Gemini request must not hide the outage behind the fallback
+                    raise outage
+                run["provider"], run["model"] = "deterministic", None
+                run["warnings"].append("Gemini could not serve this run; the deterministic fallback agent produced it with the same tools")
+                _run_deterministic(sess, registry, conjunction_id, run)
         else:
             _run_deterministic(sess, registry, conjunction_id, run)
     except Exception as exc:  # the run record must always be returned to the UI
@@ -206,12 +212,32 @@ def _run_deterministic(sess: SimulationSession, reg: ToolRegistry, conjunction_i
 # Gemini
 # --------------------------------------------------------------------------
 
-def _run_gemini(sess: SimulationSession, reg: ToolRegistry, conjunction_id: Optional[str], run: Dict[str, Any]) -> None:
+def _run_gemini_chain(sess: SimulationSession, reg: ToolRegistry, conjunction_id: Optional[str], run: Dict[str, Any]):
+    """Try the configured model and then its fallbacks; None once one of them completed the run, else the last outage."""
+    from .gemini_client import GeminiUnavailable
+
+    chain = get_settings().gemini_model_chain
+    last: Optional[GeminiUnavailable] = None
+    for i, model in enumerate(chain):
+        run["model"] = model
+        try:
+            _run_gemini(sess, reg, conjunction_id, run, model)
+            return None
+        except GeminiUnavailable as exc:
+            last = exc
+            more = i + 1 < len(chain)
+            run["warnings"].append(f"{model} unavailable ({exc.reason})" + ("; trying the next model" if more else ""))
+    return last
+
+
+def _run_gemini(sess: SimulationSession, reg: ToolRegistry, conjunction_id: Optional[str], run: Dict[str, Any],
+                model: Optional[str] = None) -> None:
     from .gemini_client import GeminiClient
 
     s = get_settings()
-    client = GeminiClient(api_key=s.gemini_api_key, model=s.gemini_model, system_instruction=SYSTEM_PROMPT,
-                          declarations=function_declarations())
+    client = GeminiClient(api_key=s.gemini_api_key, model=model or s.gemini_model, system_instruction=SYSTEM_PROMPT,
+                          declarations=function_declarations(), attempts=s.gemini_retry_attempts,
+                          base_delay_s=s.gemini_retry_base_s)
     scen = sess.scenario
     prompt = (f"Scenario '{scen.name}' ({scen.kind}). Primary object: {scen.primary_id}. Window {iso(scen.start_unix)} to "
               f"{iso(scen.end_unix)}. ")
