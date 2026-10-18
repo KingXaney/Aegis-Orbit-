@@ -32,3 +32,6 @@ data/sessions/
 .idea/
 .vscode/
 *.log
+
+# TypeScript incremental build caches
+*.tsbuildinfo
