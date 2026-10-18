@@ -422,5 +422,18 @@ def without_last_burn(primary: OrbitalObject) -> OrbitalObject:
                    warnings=list(primary.warnings), **_orbit_summary(last.r0_km, last.v0_kms))
 
 
+def before_burn(primary: OrbitalObject, maneuver_id: str) -> OrbitalObject:
+    """The primary as it flew before ``maneuver_id``: its native arc plus only the burns committed earlier
+    (what a ghost of the spacecraft flies after that burn). Rebuilt arc by arc with ``with_segment`` so the
+    orbit summary and basis match; re-anchored epochs stay valid because an anchor never leaves its own arc."""
+    ids = [s.maneuver_id for s in primary.segments]
+    if maneuver_id not in ids:
+        raise ValueError(f"{maneuver_id} is not a committed burn of {primary.object_id}")
+    obj = original_of(primary)
+    for seg in primary.segments[: ids.index(maneuver_id)]:
+        obj = with_segment(obj, seg)
+    return obj
+
+
 # Older name, kept for callers that preview a candidate on top of the current primary.
 maneuvered_primary = with_burn

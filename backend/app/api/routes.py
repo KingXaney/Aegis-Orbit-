@@ -110,8 +110,9 @@ def object_detail(object_id: str, scenario_id: str = Query(...), at: Optional[st
 def object_trajectory(object_id: str, scenario_id: str = Query(...), start: Optional[str] = None,
                       end: Optional[str] = None, step_s: float = Query(default=60.0, ge=1.0, le=3600.0),
                       maneuver_id: Optional[str] = None,
-                      variant: Optional[str] = Query(default=None, description="committed (default) | original")):
-    """The primary's default trajectory includes its committed burns; `variant=original` leaves them out."""
+                      variant: Optional[str] = Query(default=None, description="committed (default) | original | before_burn (with the maneuver_id of a committed burn)")):
+    """The primary's default trajectory includes its committed burns; `variant=original` leaves them out;
+    `variant=before_burn` with a committed `maneuver_id` is the course before that burn (its ghost's path)."""
     return _call(service.trajectory, _session(scenario_id), object_id, start, end, step_s, maneuver_id, variant)
 
 

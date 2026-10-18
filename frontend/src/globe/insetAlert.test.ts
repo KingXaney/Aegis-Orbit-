@@ -49,4 +49,12 @@ describe('insetAlert', () => {
     expect(insetAlert({ now: 100, threats: dodged, burns: [BURN], burnFiring: { maneuverId: 'm1' } })).toEqual({ level: 'maneuver', burnUnix: null });
     expect(insetAlert({ now: BURN + 1, threats: dodged, burns: [BURN], burnFiring: null })).toEqual({ level: 'normal' });
   });
+
+  it('speaks for the tracked ghost until its hold is over', () => {
+    const ghost = { crashUnix: TCA, missKm: 0.35 };
+    expect(insetAlert({ now: TCA - 30, threats: critical, burns: [BURN], burnFiring: null, ghost })).toEqual({ level: 'ghost', crashUnix: TCA, missKm: 0.35, crashed: false });
+    expect(insetAlert({ now: TCA + 1, threats: [], burns: [], burnFiring: { maneuverId: 'm' }, ghost })).toMatchObject({ level: 'ghost', crashed: true });
+    expect(insetAlert({ now: TCA + 60, threats: [], burns: [], burnFiring: null, ghost })).toEqual({ level: 'normal' });
+    expect(insetAlert({ now: TCA - 30, threats: critical, burns: [], burnFiring: null, ghost: null })).toMatchObject({ level: 'danger' });
+  });
 });

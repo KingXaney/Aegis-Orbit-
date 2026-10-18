@@ -128,6 +128,8 @@ def test_evaluate_commits_a_burn_and_the_pass_clears(session):
     burn = session.committed[0]
     assert NOW + 30.0 <= burn.burn_time_unix < NOW + 2400.0 - 300.0
     assert res["simulation"]["committed_maneuvers"][0]["source"] == "autopilot"
+    ap = res["simulation"]["committed_maneuvers"][0]["avoided_pass"]
+    assert ap["secondary_id"] == jid and abs(ap["tca_unix"] - (NOW + 2400.0)) < 2.0 and abs(ap["miss_km"] - 0.4) < 0.05
     # the same evaluation again within the interval is served from the cache
     again = sandbox.evaluate(session, NOW + 1.0)
     assert again["cached"] is True
@@ -138,6 +140,9 @@ def test_evaluate_commits_a_burn_and_the_pass_clears(session):
     assert hit and hit[0]["miss_distance_km"] >= 5.0 and ORDER.index(hit[0]["threat_state"]) <= ORDER.index("MONITORING")
     assert [a["outcome"] for a in later["actions"] if a["secondary_id"] == jid] in ([], ["MITIGATED"])
     assert later["simulation"]["committed_maneuvers"][0]["fired"] is True
+    # removing the junk keeps the burn, avoided pass included (the frontend drops the ghost itself)
+    out = sandbox.remove(session, NOW + 1900.0, object_ids=[jid])
+    assert out["removed"] == [jid] and out["simulation"]["committed_maneuvers"][0]["avoided_pass"]["secondary_id"] == jid
 
 
 def test_sequential_spawns_commit_burns_in_time_order(session):
@@ -155,6 +160,12 @@ def test_sequential_spawns_commit_burns_in_time_order(session):
     assert len(times) == n_first + 1 and times == sorted(times) and len(set(times)) == len(times)
     primary = session.scenario.catalog.require(synthetic.PRIMARY_ID)
     assert len(primary.segments) == len(session.committed)
+    # the second ghost flies the course with the first burn but without the second
+    second = session.committed[-1]
+    assert second.avoided_pass["secondary_id"] == sp["object"]["object_id"]
+    ghost = service.trajectory(session, synthetic.PRIMARY_ID, iso(now2), iso(now2 + 2 * period), 60.0,
+                               maneuver_id=second.maneuver_id, variant="before_burn")
+    assert ghost["variant"] == "before_burn" and ghost["burn_times_unix"] == times[:-1]
 
 
 def test_autopilot_off_waits_for_approval(session):

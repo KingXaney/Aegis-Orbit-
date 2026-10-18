@@ -71,6 +71,45 @@ def test_approve_commits_the_burn_into_the_default_trajectory(client):
     assert client.post("/api/simulation/approve", json={"scenario_id": SID, "maneuver_id": mid}).status_code == 409
 
 
+def test_approve_records_the_avoided_pass_and_serves_the_before_burn_path(client):
+    cid, plan = _screen_plan(client)
+    conj = next(c for c in client.get("/api/conjunctions", params={"scenario_id": SID}).json()["conjunctions"] if c["conjunction_id"] == cid)
+    mid = plan["recommended_ids"][0]
+    cand = next(c for c in plan["candidates"] if c["maneuver_id"] == mid)
+    before, pos_before = _positions(client)
+    traj_url = f"/api/objects/{synthetic.PRIMARY_ID}/trajectory"
+    base = {"scenario_id": SID, "variant": "before_burn"}
+    # a candidate that is not committed has no before-burn path yet
+    assert client.get(traj_url, params={**base, "maneuver_id": mid}).status_code == 400
+
+    sim = client.post("/api/simulation/approve", json={"scenario_id": SID, "maneuver_id": mid}).json()["simulation"]
+    ap = sim["committed_maneuvers"][0]["avoided_pass"]
+    assert ap["conjunction_id"] == cid and ap["secondary_id"] == synthetic.SECONDARY_ID and ap["secondary_name"]
+    assert ap["basis"] == "screening" and ap["threat_state"] == "CRITICAL"
+    assert abs(ap["tca_unix"] - (cand["burn_time_unix"] + cand["lead_time_s"])) < 1e-6
+    assert abs(ap["tca_unix"] - conj["tca_unix"]) < 1.0 and ap["tca"] == iso(ap["tca_unix"])
+    assert abs(ap["miss_km"] - cand["screening_miss_distance_km"]) < 1e-9
+    assert len(ap["ghost_r_km"]) == 3 and len(ap["secondary_r_km"]) == 3 and ap["relative_speed_kms"] > 1.0
+
+    # the ghost's course is the primary without this burn: the pre-approval path
+    ghost, pos_ghost = _positions(client, variant="before_burn", maneuver_id=mid)
+    assert ghost["variant"] == "before_burn" and ghost["burn_times_unix"] == [] and ghost["maneuver_id"] == mid
+    assert ghost["times_unix"] == before["times_unix"] and np.allclose(pos_ghost, pos_before)
+    # at the avoided pass the ghost and the debris are the recorded miss apart
+    window = {"start": iso(ap["tca_unix"]), "end": iso(ap["tca_unix"] + 1.0), "step_s": 1}
+    at = client.get(traj_url, params={**base, "maneuver_id": mid, **window}).json()
+    deb = client.get(f"/api/objects/{synthetic.SECONDARY_ID}/trajectory", params={"scenario_id": SID, **window}).json()
+    gap = float(np.linalg.norm(np.array(at["positions_km"][0]) - np.array(deb["positions_km"][0])))
+    assert abs(gap - ap["miss_km"]) < 0.05
+
+    # the variant needs the maneuver id of a committed burn of the primary
+    assert client.get(traj_url, params=base).status_code == 400
+    assert client.get(traj_url, params={**base, "maneuver_id": "MV-nope"}).status_code == 404
+    assert client.get(f"/api/objects/{synthetic.SECONDARY_ID}/trajectory", params={**base, "maneuver_id": mid}).status_code == 400
+    client.post("/api/simulation/reject", json={"scenario_id": SID, "maneuver_id": mid, "reason": "operator"})
+    assert client.get(traj_url, params={**base, "maneuver_id": mid}).status_code == 400
+
+
 def test_reject_withdraws_the_committed_burn(client):
     cid, plan = _screen_plan(client)
     mid = plan["recommended_ids"][0]

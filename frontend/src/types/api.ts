@@ -39,6 +39,26 @@ export interface DecisionRecord {
   note: string;
 }
 
+/**
+ * The pass a committed burn was taken for, as screened before the burn: the course the spacecraft's
+ * ghost flies into. `basis` says whether the screened conjunction was still at hand when the burn was
+ * committed or the values come from the candidate alone.
+ */
+export interface AvoidedPass {
+  conjunction_id: string;
+  secondary_id: string | null;
+  secondary_name: string | null;
+  tca: string;
+  tca_unix: number;
+  miss_km: number;
+  relative_speed_kms: number | null;
+  threat_state: ThreatState | null;
+  /** The un-burned primary's TEME position at the pass (km), when screened. */
+  ghost_r_km: number[] | null;
+  secondary_r_km: number[] | null;
+  basis: 'screening' | 'candidate';
+}
+
 /** A burn that is part of the primary's trajectory (approved by a human or committed by the autopilot). */
 export interface CommittedManeuver extends Maneuver {
   source: 'human' | 'autopilot';
@@ -48,6 +68,7 @@ export interface CommittedManeuver extends Maneuver {
   secondary_check_status: string | null;
   /** The burn time has passed at the backend's last known clock. */
   fired: boolean;
+  avoided_pass?: AvoidedPass | null;
 }
 
 export type SimulationEventKind =
@@ -236,7 +257,7 @@ export interface Trajectory {
   burn_time: string | null;
   /** Committed (or previewed) burns along this path. */
   burn_times_unix?: number[];
-  variant?: 'original' | 'committed' | 'candidate';
+  variant?: 'original' | 'committed' | 'candidate' | 'before_burn';
 }
 
 export interface PcResult {

@@ -6,7 +6,8 @@ import type { SimulationController } from '../simulation/controller';
 import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, ScreenResponse, ThreatState, Trajectory } from '../types/api';
 import { TimeBridge, temeToFixed, temeToFixedMatrix, temeVelocityToFixed } from './frames';
 import { SpacecraftModel } from './spacecraft';
-import { addDetectionRadius } from './detectionRadius';
+import { addDetectionRadius, detectionRadii } from './detectionRadius';
+import { GHOST_HOLD_S, formatMiss, ghostPhase, type Ghost } from '../simulation/ghosts';
 import { CatalogCloud } from '../perception/catalogCloud';
 import { INITIAL_PLUME, advancePlume, plumeIntensity, type BurnRef, type PlumeState } from './thrusters';
 
@@ -32,10 +33,22 @@ export interface SceneOptions {
   inset?: boolean;
 }
 
-/** The primary's path before its latest committed burn, kept as the dashed original for comparison. */
-export interface PreviousPath {
-  trajectory: Trajectory;
-  replacedAtBurnUnix: number;
+/** A ghost of the spacecraft on the globe: the entities, the model and this frame's state. */
+interface GhostActor {
+  view: Ghost;
+  traj: SampledTrajectory;
+  entity: Cesium.Entity;
+  extras: Cesium.Entity[];
+  model: SpacecraftModel | null;
+  /** The ghost's TEME state this frame, null while it is not flying. */
+  stateNow: { p: Vec3; v: Vec3 } | null;
+}
+
+/** Per-frame facts about a piece of junk in the close-up, read by its threat cues. */
+interface JunkCue {
+  camDistM: number;
+  gapM: number;
+  threat: boolean;
 }
 
 // Path colours: a glowing teal band for the path the spacecraft will fly, dashed cyan for the original
@@ -86,6 +99,35 @@ const JUNK_MIN_PIXELS = 24;
 const JUNK_MAX_BOOST = 400;
 // A pass is over this long after its closest approach: its markers go and it stops colouring its object.
 const PASS_DONE_S = 90;
+// Close-up (inset) only. Junk on a collision course with what the close-up follows is drawn as a model
+// from much further out and much larger than other junk, with a red halo, a kind glyph while the model
+// is still too small, and a lead arrow toward the target; other junk keeps the main view's boost.
+const INSET_JUNK_MIN_PIXELS = 40;
+const INSET_THREAT_BOOST_RANGE_M = 100_000;
+const INSET_THREAT_MIN_PIXELS = 64;
+const INSET_THREAT_MAX_BOOST = 2000;
+/** An enlarged piece never grows past this fraction of its distance to the target, so it cannot swallow it. */
+const JUNK_MAX_GAP_FRACTION = 0.25;
+const THREAT_HALO_SCALE = 1.8;
+const THREAT_HALO_MIN_PIXELS = 28;
+const THREAT_LEAD_PIXELS = 40;
+const THREAT_LEAD_MAX_RANGE_M = 50_000;
+/**
+ * Close-up: while collision-course junk is within this gap of what the close-up follows, the camera eases
+ * to a spot behind and above the target looking toward the junk (keeping the user's zoom), so the
+ * debris crosses the frame instead of passing behind the camera.
+ */
+const DIRECTOR_RANGE_M = 80_000;
+const DIRECTOR_SMOOTH = 0.15;
+/**
+ * How far the director camera sits off the target-to-debris line (fraction of the view range), below it in
+ * the radial sense: looking slightly up at the target puts the incoming debris in the lower part of the
+ * frame, against space and clear of the caption (about 17 degrees off the view axis).
+ */
+const DIRECTOR_LIFT = -0.3;
+/** The ghost's impact flash: pixel size at the collision, shrinking to the end size over GHOST_HOLD_S. */
+const GHOST_FLASH_PX = 144;
+const GHOST_FLASH_END_PX = 32;
 const DV_ARROW_LINGER_MS = 4000;
 const THREAT_ORDER: ThreatState[] = ['NORMAL', 'MONITORING', 'UNVERIFIED', 'ELEVATED', 'CRITICAL', 'MITIGATED'];
 
@@ -117,13 +159,24 @@ const SATELLITE_SVG = encodeURIComponent(
     </g></svg>`,
 );
 
+// Close-up glyphs for junk on a collision course while its model is still too small to see.
+const JUNK_GLYPHS: Record<string, string> = {
+  'debris-fragment': `<polygon points="6,20 14,4 24,10 34,6 30,20 36,30 22,36 10,32" fill="#fecaca" stroke="#f87171" stroke-width="2"/>`,
+  'rocket-body': `<rect x="8" y="14" width="22" height="12" rx="4" fill="#fecaca" stroke="#f87171" stroke-width="2"/><polygon points="30,14 38,10 38,30 30,26" fill="#f87171"/>`,
+  'box-wing-bus': `<rect x="15" y="14" width="10" height="12" fill="#fecaca" stroke="#f87171" stroke-width="2"/><rect x="2" y="17" width="11" height="6" fill="#fca5a5"/><rect x="27" y="17" width="11" height="6" fill="#fca5a5"/>`,
+};
+function junkGlyph(designId: string): string {
+  const body = JUNK_GLYPHS[designId] ?? JUNK_GLYPHS['debris-fragment'];
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">${body}</svg>`)}`;
+}
+
 function objectColor(o: ObjectSummary): Cesium.Color {
   if (o.category === 'DEBRIS') return COLORS.debris;
   return COLORS.tracked;
 }
 
-/** The burn flare: a soft radial glow drawn as a billboard at the burn point (visible from the World view). */
-function flareImage(): HTMLCanvasElement {
+/** A soft radial glow drawn as a billboard: the burn flare (lime) at the burn point, the ghost's impact flash (red). */
+function flareImage(core = '247, 254, 231', glow = '163, 230, 53'): HTMLCanvasElement {
   const size = 64;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -131,10 +184,10 @@ function flareImage(): HTMLCanvasElement {
   const ctx = canvas.getContext('2d');
   if (ctx) {
     const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    g.addColorStop(0, 'rgba(247, 254, 231, 1)');
-    g.addColorStop(0.25, 'rgba(163, 230, 53, 0.9)');
-    g.addColorStop(0.6, 'rgba(163, 230, 53, 0.25)');
-    g.addColorStop(1, 'rgba(163, 230, 53, 0)');
+    g.addColorStop(0, `rgba(${core}, 1)`);
+    g.addColorStop(0.25, `rgba(${glow}, 0.9)`);
+    g.addColorStop(0.6, `rgba(${glow}, 0.25)`);
+    g.addColorStop(1, `rgba(${glow}, 0)`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, size, size);
   }
@@ -166,10 +219,21 @@ export class GlobeScene {
   private committed: Maneuver[] = [];
   private committedEntities: Cesium.Entity[] = [];
   private burnRefs: BurnRef[] = [];
-  private previousPrimary: SampledTrajectory | null = null;
-  private previousReplacedAt = 0;
-  /** Screened passes per secondary (state and closest-approach time); past passes stop colouring an object. */
-  private threats: { id: string; state: ThreatState; tcaUnix: number }[] = [];
+  /** Ghosts of the spacecraft (one per committed burn), by burn id, and the store's current list. */
+  private ghosts = new Map<string, GhostActor>();
+  private ghostViews: Ghost[] = [];
+  /** What Follow mode tracks: the spacecraft, or a ghost by its burn id (the close-up's tabs). */
+  private trackTargetId: 'primary' | string = 'primary';
+  /** The tracked target's TEME state this frame (the spacecraft's unless a flying ghost is followed). */
+  private focusStateNow: { p: Vec3; v: Vec3 } | null = null;
+  private criticalKm = 5;
+  /** Close-up: this frame's facts about each piece of junk, for its threat cues. */
+  private junkCues = new Map<string, JunkCue>();
+  /** Close-up: the camera is being aimed at incoming debris (see aimAtIncomingDebris). */
+  private directorActive = false;
+  private readonly directorOffset = new Cesium.Cartesian3();
+  /** Screened passes per secondary (state, closest-approach time, miss); past passes stop colouring an object. */
+  private threats: { id: string; state: ThreatState; tcaUnix: number; missKm: number }[] = [];
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true };
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
@@ -194,12 +258,13 @@ export class GlobeScene {
   private earthTextureUrl: string | null = null;
   /** Camera within CLOSE_VIEW_M of the primary this frame (see the band styling constants). */
   private closeView = false;
-  private readonly primaryFixed = new Cesium.Cartesian3();
   private plume: PlumeState = INITIAL_PLUME;
   private reportedBurnId: string | null = null;
   /** The burn that fired last and when it stopped (the delta-v arrow lingers a moment after the plume). */
   private lastFired: { id: string; endedMs: number } | null = null;
   private flare: HTMLCanvasElement | null = null;
+  private flareRed: HTMLCanvasElement | null = null;
+  private readonly focusFixed = new Cesium.Cartesian3();
   private readonly labelCache = new Map<string, string>();
 
   constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string, options: SceneOptions = {}) {
@@ -331,22 +396,52 @@ export class GlobeScene {
     const primaryTraj = this.primaryId ? this.trajectories.get(this.primaryId) : undefined;
     const primaryState = primaryTraj?.stateAt(unix) ?? null;
     this.primaryStateNow = primaryState;
-    const primaryFixed = primaryState ? temeToFixed(time, primaryState.p, this.primaryFixed) : null;
-    this.closeView = !!primaryFixed && Cesium.Cartesian3.distance(camera, primaryFixed) < CLOSE_VIEW_M;
+    // ghosts first: the camera may be following one
+    for (const actor of this.ghosts.values()) {
+      const phase = ghostPhase(actor.view, unix);
+      actor.stateNow = phase === 'alive' || phase === 'crashing' ? actor.traj.stateAt(unix) : null;
+    }
+    this.syncTrackedEntity();
+    const trackedGhost = this.trackTargetId !== 'primary' ? this.ghosts.get(this.trackTargetId) : undefined;
+    this.focusStateNow = trackedGhost?.stateNow ?? primaryState;
+    const focusFixed = this.focusStateNow ? temeToFixed(time, this.focusStateNow.p, this.focusFixed) : null;
+    this.closeView = !!focusFixed && Cesium.Cartesian3.distance(camera, focusFixed) < CLOSE_VIEW_M;
     for (const [id, model] of this.models) {
       const st = this.trajectories.get(id)?.stateAt(unix);
       if (!st) {
         model.hide();
+        this.junkCues.delete(id);
         continue;
       }
       const pos = temeToFixed(time, st.p, this.scratchPos);
       let scale = 1;
       const obj = this.objects.get(id);
-      if (obj?.spawned_at_unix != null && id !== this.primaryId && primaryFixed && Cesium.Cartesian3.distance(pos, primaryFixed) < JUNK_BOOST_RANGE_M) {
-        scale = model.boostFor(Cesium.Cartesian3.distance(camera, pos), JUNK_MIN_PIXELS, JUNK_MAX_BOOST);
+      if (obj?.spawned_at_unix != null && id !== this.primaryId && focusFixed) {
+        // Spawned junk near what the view follows is drawn enlarged so it can be seen at all. In the
+        // close-up, junk on a collision course with the followed target is drawn from much further out.
+        const gap = Cesium.Cartesian3.distance(pos, focusFixed);
+        const camDist = Cesium.Cartesian3.distance(camera, pos);
+        const threat = this.inset && this.onCollisionCourse(id, unix);
+        if (gap < (threat ? INSET_THREAT_BOOST_RANGE_M : JUNK_BOOST_RANGE_M)) {
+          const minPixels = threat ? INSET_THREAT_MIN_PIXELS : this.inset ? INSET_JUNK_MIN_PIXELS : JUNK_MIN_PIXELS;
+          scale = model.boostFor(camDist, minPixels, threat ? INSET_THREAT_MAX_BOOST : JUNK_MAX_BOOST);
+          if (this.inset) scale = Math.max(1, Math.min(scale, (JUNK_MAX_GAP_FRACTION * gap) / model.envelopeRadiusM));
+        }
+        if (this.inset) this.junkCues.set(id, { camDistM: camDist, gapM: gap, threat });
       }
       model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), scale);
     }
+    for (const actor of this.ghosts.values()) {
+      if (!actor.model) continue;
+      const st = actor.stateNow;
+      if (!st || ghostPhase(actor.view, unix) !== 'alive') {
+        actor.model.hide();
+        continue;
+      }
+      const pos = temeToFixed(time, st.p, this.scratchPos);
+      actor.model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), 1);
+    }
+    if (this.inset) this.aimAtIncomingDebris(unix);
     // the primary's thrusters: a plume while a committed burn fires, a faint glow just before
     const realNow = performance.now();
     this.plume = advancePlume(this.plume, { nowUnix: unix, speed: this.controller.speed, playing: this.controller.playing, realNowMs: realNow, burns: this.burnRefs });
@@ -488,6 +583,7 @@ export class GlobeScene {
     this.bridge = new TimeBridge(detail.window.start_unix);
     this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
     this.primaryId = detail.primary_id;
+    this.criticalKm = detectionRadii(detail.thresholds).criticalKm;
   }
 
   /**
@@ -514,6 +610,7 @@ export class GlobeScene {
       }
     }
     if (primaryAdded) this.applyCameraMode();
+    this.reconcileGhosts();
   }
 
   private addObject(obj: ObjectSummary): void {
@@ -568,6 +665,7 @@ export class GlobeScene {
       this.addPrimaryPath();
     } else {
       this.addObjectPath(id, baseColor, isHighlight, spawnedAt);
+      if (spawnedAt !== null && this.inset) this.addThreatCues(obj, pos, present);
     }
   }
 
@@ -582,6 +680,7 @@ export class GlobeScene {
     this.records.delete(id);
     this.trajectories.delete(id);
     this.labelCache.delete(id);
+    this.junkCues.delete(id);
   }
 
   private addModel(obj: ObjectSummary): void {
@@ -665,25 +764,8 @@ export class GlobeScene {
         show: showOriginal,
       },
     });
-    // Original path (dashed cyan): the path before the latest committed burn, from that burn on, kept
-    // for comparison for one orbit after it.
-    const original = this.viewer.entities.add({
-      id: 'path:primary:original',
-      polyline: {
-        positions: this.pathPositions(() => this.previousPrimary, (now) => {
-          const burn = this.previousReplacedAt;
-          if (now >= burn + this.periodS) return null;
-          const start = Math.max(now, burn);
-          const end = now + ahead();
-          return start < end ? [start, end] : null;
-        }),
-        width: 2,
-        material: this.dash(COLORS.primary.withAlpha(0.7)),
-        arcType: Cesium.ArcType.NONE,
-        show: showOriginal,
-      },
-    });
-    this.objectPaths.set(id, [trail, planned, plannedFar, original]);
+    // (The course before a committed burn is drawn by that burn's ghost, see addGhost.)
+    this.objectPaths.set(id, [trail, planned, plannedFar]);
   }
 
   private addObjectPath(objectId: string, baseColor: Cesium.Color, isHighlight: boolean, spawnedAt: number | null): void {
@@ -777,7 +859,7 @@ export class GlobeScene {
 
   /** Colour objects by their screened threat state (red critical/elevated, amber unverified, blue monitoring). */
   setThreats(screening: ScreenResponse | null): void {
-    this.threats = (screening?.conjunctions ?? []).map((c) => ({ id: c.secondary_id, state: c.threat_state, tcaUnix: c.tca_unix }));
+    this.threats = (screening?.conjunctions ?? []).map((c) => ({ id: c.secondary_id, state: c.threat_state, tcaUnix: c.tca_unix, missKm: c.miss_distance_km }));
   }
 
   // ------------------------------------------------------------------ candidates
@@ -885,15 +967,13 @@ export class GlobeScene {
   /**
    * Burns that are part of the primary's trajectory: a marker and label at each burn point, the
    * post-burn closest approach, a flare while the burn fires, and the thruster plume on the model.
-   * `previous` is the path before the latest burn, drawn dashed for comparison.
+   * The course before each burn is a ghost's (setGhosts).
    */
-  setCommittedBurns(maneuvers: Maneuver[], previous: PreviousPath | null): void {
+  setCommittedBurns(maneuvers: Maneuver[]): void {
     for (const e of this.committedEntities) this.viewer.entities.remove(e);
     this.committedEntities = [];
     this.committed = maneuvers;
     this.burnRefs = maneuvers.map((m) => ({ id: m.maneuver_id, burnUnix: m.burn_time_unix, dvRtn: m.dv_rtn_mps }));
-    this.previousPrimary = previous ? new SampledTrajectory(previous.trajectory) : null;
-    this.previousReplacedAt = previous?.replacedAtBurnUnix ?? 0;
     for (const m of maneuvers) {
       const mid = m.maneuver_id;
       const burn = m.burn_time_unix;
@@ -956,6 +1036,299 @@ export class GlobeScene {
     }
   }
 
+  // ------------------------------------------------------------------ ghosts
+  /**
+   * Ghosts of the spacecraft: one per committed burn, flying the course it would have flown without
+   * that burn until the pass the burn avoided. Diffed by burn id (the store replaces its simulation
+   * state often); a ghost whose path is still loading is skipped until it arrives.
+   */
+  setGhosts(ghosts: Ghost[]): void {
+    this.ghostViews = ghosts;
+    this.reconcileGhosts();
+  }
+
+  private reconcileGhosts(): void {
+    if (this.destroyed || !this.detail) return;
+    const wanted = new Map(this.ghostViews.filter((g) => g.trajectory).map((g) => [g.id, g]));
+    for (const id of [...this.ghosts.keys()]) if (!wanted.has(id)) this.removeGhost(id);
+    const design = this.primaryId ? this.objects.get(this.primaryId)?.design : undefined;
+    for (const [id, view] of wanted) {
+      let actor = this.ghosts.get(id);
+      if (!actor) {
+        actor = this.addGhost(view);
+      } else if (actor.view !== view) {
+        if (actor.view.trajectory !== view.trajectory && view.trajectory) actor.traj = new SampledTrajectory(view.trajectory);
+        actor.view = view;
+      }
+      if (design && !actor.model) actor.model = new SpacecraftModel(this.viewer.scene, design, { ghost: true });
+    }
+    this.syncTrackedEntity();
+  }
+
+  private addGhost(view: Ghost): GhostActor {
+    const id = view.id;
+    const actor: GhostActor = { view, traj: new SampledTrajectory(view.trajectory!), entity: null as unknown as Cesium.Entity, extras: [], model: null, stateNow: null };
+    const now = () => this.controller.currentUnix;
+    const phase = () => ghostPhase(actor.view, now());
+    const flying = () => {
+      const p = phase();
+      return p === 'alive' || p === 'crashing';
+    };
+    const modelShown = () => actor.model?.shown ?? false;
+    const position = new Cesium.CallbackPositionProperty((time, result) => {
+      const p = actor.traj.positionAt(this.unixOf(time));
+      if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return undefined;
+      return temeToFixed(time ?? this.bridge.toJulian(now()), p, result);
+    }, false, Cesium.ReferenceFrame.FIXED);
+    const miss = formatMiss(view.missKm);
+    actor.entity = this.viewer.entities.add({
+      id: `ghost:${id}`,
+      name: `Ghost ${view.index}`,
+      position,
+      viewFrom: this.defaultViewFrom(),
+      // kept shown while the ghost flies (transparent once the model draws): a tracked entity needs a graphic to bound
+      point: {
+        pixelSize: 7,
+        color: new Cesium.CallbackProperty(() => (modelShown() ? Cesium.Color.TRANSPARENT : COLORS.primary.withAlpha(0.85)), false),
+        outlineColor: new Cesium.CallbackProperty(() => (modelShown() ? Cesium.Color.TRANSPARENT : POINT_OUTLINE), false),
+        outlineWidth: 1.5,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        show: new Cesium.CallbackProperty(flying, false),
+      },
+      label: {
+        ...this.labelGraphics('', COLORS.primary, -22),
+        text: new Cesium.CallbackProperty(() => {
+          const dt = Math.max(0, actor.view.crashUnix - now());
+          const m = Math.floor(dt / 60);
+          const s = Math.floor(dt % 60);
+          return `GHOST ${actor.view.index} · NO DODGE · meets ${actor.view.secondaryName} in ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} · ${miss}`;
+        }, false),
+        show: new Cesium.CallbackProperty(() => this.layers.labels && phase() === 'alive', false),
+      },
+    });
+    const ahead = () => this.periodS * AHEAD_ORBITS;
+    // the course not taken, dashed, from the ghost to the collision
+    actor.extras.push(
+      this.viewer.entities.add({
+        id: `ghost:${id}#path`,
+        polyline: {
+          positions: this.pathPositions(() => actor.traj, (t) => {
+            if (ghostPhase(actor.view, t) !== 'alive') return null;
+            const start = Math.max(t, actor.view.bornUnix);
+            const end = Math.min(t + ahead(), actor.view.crashUnix);
+            return start < end ? [start, end] : null;
+          }),
+          width: 2,
+          material: this.dash(COLORS.primary.withAlpha(0.7)),
+          arcType: Cesium.ArcType.NONE,
+          show: new Cesium.CallbackProperty(() => this.layers.original, false),
+        },
+      }),
+    );
+    const crashPoint = view.crashPointTeme ?? actor.traj.positionAt(view.crashUnix) ?? null;
+    if (crashPoint) {
+      actor.extras.push(
+        this.viewer.entities.add({
+          id: `ghost:${id}#crash`,
+          position: this.staticPositionProperty(crashPoint),
+          point: { pixelSize: 8, color: Cesium.Color.TRANSPARENT, outlineColor: COLORS.threat, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY, show: new Cesium.CallbackProperty(() => this.layers.markers && flying(), false) },
+          label: {
+            ...this.labelGraphics(`WOULD MEET ${view.secondaryName.toUpperCase()} · ${miss} · inside ${view.criticalRadiusKm} km`, COLORS.threat, 22),
+            show: new Cesium.CallbackProperty(() => this.layers.labels && this.layers.markers && flying(), false),
+          },
+        }),
+      );
+    }
+    // the impact flash at the collision, in both views
+    const flashPx = () => {
+      const f = Math.min(1, Math.max(0, 1 - (now() - actor.view.crashUnix) / GHOST_HOLD_S));
+      return GHOST_FLASH_END_PX + (GHOST_FLASH_PX - GHOST_FLASH_END_PX) * f;
+    };
+    actor.extras.push(
+      this.viewer.entities.add({
+        id: `ghost:${id}#flash`,
+        position,
+        billboard: {
+          image: (this.flareRed ??= flareImage('255, 241, 242', '248, 113, 113')),
+          width: new Cesium.CallbackProperty(flashPx, false),
+          height: new Cesium.CallbackProperty(flashPx, false),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          show: new Cesium.CallbackProperty(() => phase() === 'crashing', false),
+        },
+      }),
+    );
+    this.ghosts.set(id, actor);
+    return actor;
+  }
+
+  private removeGhost(id: string): void {
+    const actor = this.ghosts.get(id);
+    if (!actor) return;
+    // never remove what the camera tracks: Cesium would be left with nothing to follow
+    if (this.trackTargetId === id) {
+      this.trackTargetId = 'primary';
+      this.syncTrackedEntity();
+    }
+    this.viewer.entities.remove(actor.entity);
+    for (const e of actor.extras) this.viewer.entities.remove(e);
+    actor.model?.destroy();
+    this.ghosts.delete(id);
+  }
+
+  /** Follow the spacecraft ('primary') or one of its ghosts (by burn id); applied as soon as the ghost exists and flies. */
+  setTrackTarget(id: 'primary' | string): void {
+    if (id === this.trackTargetId) return;
+    this.trackTargetId = id;
+    this.syncTrackedEntity();
+  }
+
+  /** The entity Follow mode should track right now: the chosen ghost while it flies, else the spacecraft. */
+  private trackedEntity(): Cesium.Entity | null {
+    if (this.trackTargetId !== 'primary') {
+      const actor = this.ghosts.get(this.trackTargetId);
+      if (actor && actor.stateNow) return actor.entity;
+    }
+    return this.primaryEntity;
+  }
+
+  /** Re-track when the wanted entity changed (a ghost arrived, died, or the tab moved); a change re-applies the default offset. */
+  private syncTrackedEntity(): void {
+    if (this.destroyed || this.cameraMode !== 'follow') return;
+    const want = this.trackedEntity();
+    if (!want || this.viewer.trackedEntity === want) return;
+    want.viewFrom = this.defaultViewFrom();
+    this.viewer.trackedEntity = want;
+  }
+
+  /**
+   * Close-up: while a piece of junk on a collision course with the followed target is within
+   * DIRECTOR_RANGE_M, move the camera (smoothly) to look from behind and above the target toward the
+   * debris, at the user's current range. Cesium keeps a tracked camera in the entity's velocity frame
+   * (x along the velocity, y the orbit normal, z radial), so the offset is computed in that frame.
+   */
+  private aimAtIncomingDebris(unix: number): void {
+    const focus = this.focusStateNow;
+    const camera = this.viewer.camera;
+    if (!focus || !this.viewer.trackedEntity || this.cameraMode !== 'follow') {
+      this.directorActive = false;
+      return;
+    }
+    let bestId: string | null = null;
+    let bestGap = DIRECTOR_RANGE_M;
+    for (const [id, c] of this.junkCues) {
+      if (c.threat && c.gapM < bestGap) {
+        bestGap = c.gapM;
+        bestId = id;
+      }
+    }
+    const junk = bestId ? this.trajectories.get(bestId)?.stateAt(unix) : null;
+    if (!junk) {
+      this.directorActive = false;
+      return;
+    }
+    const norm = (a: Vec3): Vec3 | null => {
+      const n = Math.hypot(a[0], a[1], a[2]);
+      return n > 0 ? [a[0] / n, a[1] / n, a[2] / n] : null;
+    };
+    const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const z = norm(focus.p);
+    const vhat = norm(focus.v);
+    const y = z && vhat ? norm(cross(z, vhat)) : null;
+    const u = norm([junk.p[0] - focus.p[0], junk.p[1] - focus.p[1], junk.p[2] - focus.p[2]]);
+    if (!z || !y || !u) return;
+    const x = cross(y, z);
+    const uLocal: Vec3 = [dot(u, x), dot(u, y), dot(u, z)];
+    // offset along the target's radial axis, made perpendicular to the line toward the debris (DIRECTOR_LIFT < 0: below it)
+    let lift: Vec3 = [-uLocal[0] * uLocal[2], -uLocal[1] * uLocal[2], 1 - uLocal[2] * uLocal[2]];
+    lift = norm(lift) ?? [0, 1, 0];
+    const range = Math.max(Cesium.Cartesian3.magnitude(camera.position), MIN_ZOOM_M * 2);
+    const dir = norm([-uLocal[0] + DIRECTOR_LIFT * lift[0], -uLocal[1] + DIRECTOR_LIFT * lift[1], -uLocal[2] + DIRECTOR_LIFT * lift[2]]);
+    if (!dir) return;
+    const desired = Cesium.Cartesian3.fromElements(dir[0] * range, dir[1] * range, dir[2] * range, this.directorOffset);
+    // the camera's position is its offset in the tracked frame: ease from where it is to where it should be
+    const next = this.directorActive ? Cesium.Cartesian3.lerp(camera.position, desired, DIRECTOR_SMOOTH, desired) : Cesium.Cartesian3.lerp(camera.position, desired, DIRECTOR_SMOOTH * 2, desired);
+    const n = Cesium.Cartesian3.magnitude(next);
+    if (!(n > 0) || !Number.isFinite(n)) return;
+    Cesium.Cartesian3.multiplyByScalar(next, range / n, next);
+    camera.lookAtTransform(camera.transform, next);
+    this.directorActive = true;
+  }
+
+  /** Close-up: is this piece of junk heading for what the close-up follows? */
+  private onCollisionCourse(objectId: string, now: number): boolean {
+    const tracked = this.trackTargetId !== 'primary' ? this.ghosts.get(this.trackTargetId) : undefined;
+    if (tracked && tracked.stateNow) return tracked.view.secondaryId === objectId && now < tracked.view.crashUnix + GHOST_HOLD_S;
+    for (const t of this.threats) {
+      if (t.id !== objectId || t.tcaUnix < now - PASS_DONE_S) continue;
+      if (t.state === 'CRITICAL' || t.state === 'ELEVATED' || t.missKm <= this.criticalKm) return true;
+    }
+    return false;
+  }
+
+  /** Close-up cues for a piece of junk on a collision course: a red halo, a kind glyph while the model is too small, a lead arrow. */
+  private addThreatCues(obj: ObjectSummary, pos: Cesium.PositionProperty, present: () => boolean): void {
+    const id = obj.object_id;
+    const cue = () => this.junkCues.get(id);
+    const model = () => this.models.get(id);
+    const active = () => present() && (cue()?.threat ?? false);
+    const haloPx = () => {
+      const c = cue();
+      const m = model();
+      if (!c || !m) return THREAT_HALO_MIN_PIXELS;
+      return Math.max(THREAT_HALO_MIN_PIXELS, THREAT_HALO_SCALE * m.pixelsAcross(c.camDistM, m.displayScale));
+    };
+    const entities = [
+      this.viewer.entities.add({
+        id: `cue:${id}#halo`,
+        position: pos,
+        billboard: {
+          image: (this.flareRed ??= flareImage('255, 241, 242', '248, 113, 113')),
+          width: new Cesium.CallbackProperty(haloPx, false),
+          height: new Cesium.CallbackProperty(haloPx, false),
+          color: COLORS.threat.withAlpha(0.6),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          show: new Cesium.CallbackProperty(active, false),
+        },
+      }),
+      this.viewer.entities.add({
+        id: `cue:${id}#glyph`,
+        position: pos,
+        billboard: {
+          image: junkGlyph(obj.design.design_id),
+          width: 22,
+          height: 22,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          show: new Cesium.CallbackProperty(() => active() && !this.modelShown(id), false),
+        },
+      }),
+      this.viewer.entities.add({
+        id: `cue:${id}#lead`,
+        polyline: {
+          positions: new Cesium.CallbackProperty((time) => {
+            const c = cue();
+            const m = model();
+            const st = this.trajectories.get(id)?.stateAt(this.unixOf(time));
+            const focus = this.focusStateNow;
+            if (!c || !m || !st || !focus || c.gapM <= 1 || c.gapM > THREAT_LEAD_MAX_RANGE_M) return [];
+            const lengthKm = Math.min(THREAT_LEAD_PIXELS * m.metresPerPixelAt(c.camDistM), 0.8 * c.gapM) / 1000;
+            const d: Vec3 = [focus.p[0] - st.p[0], focus.p[1] - st.p[1], focus.p[2] - st.p[2]];
+            const n = Math.hypot(d[0], d[1], d[2]);
+            if (!(n > 0) || !Number.isFinite(lengthKm)) return [];
+            const tip: Vec3 = [st.p[0] + (d[0] / n) * lengthKm, st.p[1] + (d[1] / n) * lengthKm, st.p[2] + (d[2] / n) * lengthKm];
+            const jd = time ?? this.bridge.toJulian(this.controller.currentUnix);
+            return [temeToFixed(jd, st.p), temeToFixed(jd, tip)];
+          }, false),
+          width: 8,
+          material: new Cesium.PolylineArrowMaterialProperty(COLORS.threat.withAlpha(0.85)),
+          arcType: Cesium.ArcType.NONE,
+          show: new Cesium.CallbackProperty(active, false),
+        },
+      }),
+    ];
+    this.objectPaths.get(id)?.push(...entities);
+  }
+
   // ------------------------------------------------------------------ layers / camera
   setLayers(layers: LayerFlags): void {
     this.layers = { ...layers };
@@ -990,10 +1363,11 @@ export class GlobeScene {
     this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     if (this.cameraMode === 'follow') {
       controller.minimumZoomDistance = MIN_ZOOM_M;
-      if (this.primaryEntity) {
+      const target = this.trackedEntity();
+      if (target) {
         // re-tracking makes Cesium apply the offset again
-        this.primaryEntity.viewFrom = this.defaultViewFrom();
-        this.viewer.trackedEntity = this.primaryEntity;
+        target.viewFrom = this.defaultViewFrom();
+        this.viewer.trackedEntity = target;
       }
       return;
     }
@@ -1024,7 +1398,12 @@ export class GlobeScene {
   private clearScenario(): void {
     this.setConjunction(null);
     this.setCandidates([], {}, null, []);
-    this.setCommittedBurns([], null);
+    this.setCommittedBurns([]);
+    for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+    this.ghostViews = [];
+    this.trackTargetId = 'primary';
+    this.focusStateNow = null;
+    this.junkCues.clear();
     this.viewer.trackedEntity = undefined;
     this.viewer.entities.removeAll();
     this.objectEntities.clear();
@@ -1055,6 +1434,8 @@ export class GlobeScene {
     this.postRenderRemover();
     this.cloud?.destroy();
     for (const id of [...this.models.keys()]) this.removeModel(id);
+    for (const actor of this.ghosts.values()) actor.model?.destroy();
+    this.ghosts.clear();
     this.handler.destroy();
     this.viewer.destroy();
     if (this.earthTextureUrl) URL.revokeObjectURL(this.earthTextureUrl);

@@ -27,7 +27,7 @@ from ..data.spacecraft import BOX_WING_BUS, DEBRIS_FRAGMENT, ROCKET_BODY, Spacec
 from ..physics.constants import MU_EARTH_KM3_S2
 from ..physics.frames import ecef_to_geodetic, osculating_elements, rotate_about, rtn_basis, teme_to_ecef
 from ..physics.propagation import (MODEL_NUMERICAL, MODEL_PIECEWISE, anchored, propagate, propagate_states, state_at)
-from ..physics.screening import Conjunction
+from ..physics.screening import Conjunction, secondary_from_conjunction_id
 from ..physics.threat import ORDER
 from ..physics.time_utils import from_unix, iso
 from . import service
@@ -540,9 +540,4 @@ def _secondary_of(sess: SimulationSession, burn) -> Optional[str]:
     for key, rec in sess.unavoidable.items():
         if rec.get("conjunction_id") == cid:
             return key[0]
-    # CJ-{primary}-{secondary}-{tca}: strip the known primary prefix and the trailing time
-    prefix = f"CJ-{sess.scenario.primary_id.replace('NORAD-', '')}-"
-    if cid.startswith(prefix):
-        body = cid[len(prefix):]
-        return body.rsplit("-", 1)[0]
-    return None
+    return secondary_from_conjunction_id(cid, sess.scenario.primary_id)

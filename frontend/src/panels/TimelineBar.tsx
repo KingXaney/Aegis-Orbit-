@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { controller, SPEED_OPTIONS } from '../simulation/controller';
+import type { Ghost } from '../simulation/ghosts';
 import { useSimulation } from '../hooks/useSimulation';
 import { useAppStore } from '../store/useAppStore';
-import { Button } from '../components/ui';
+import { Badge, Button } from '../components/ui';
 import { formatCountdown, formatUtc } from '../lib/format';
 import type { CommittedManeuver } from '../types/api';
 import { DEFAULT_SCREENING_RADIUS_KM, efficiency, nextEvent, timelineEvents, type TimelineEvent } from './timelineEvents';
 
 const NO_BURNS: CommittedManeuver[] = [];
+const NO_GHOSTS: Ghost[] = [];
 
 // Detection markers by threat state: critical passes stand out, monitored ones are short ticks.
 const DETECTION_MARK: Record<string, { color: string; h: string }> = {
@@ -38,6 +40,9 @@ export default function TimelineBar() {
   const screening = useAppStore((s) => s.screening);
   const committed = useAppStore((s) => s.simulation?.committed_maneuvers) ?? NO_BURNS;
   const plan = useAppStore((s) => s.plan);
+  const ghosts = useAppStore((s) => s.ghosts) ?? NO_GHOSTS;
+  const autoSlow = useAppStore((s) => s.autoSlow);
+  const setSpeed = useAppStore((s) => s.setSpeed);
   const scenarioKey = useAppStore((s) => (s.scenario ? `${s.scenario.scenario_id}:${s.scenario.simulation.reset_count}` : ''));
   const radiusKm = Number(screening?.thresholds?.screening_radius_km) || DEFAULT_SCREENING_RADIUS_KM;
   const events = useMemo(() => timelineEvents(screening?.conjunctions ?? [], committed, radiusKm), [screening, committed, radiusKm]);
@@ -59,8 +64,10 @@ export default function TimelineBar() {
       m.push({ t: maneuver.burn_time_unix, color: '#a3e635', label: `burn ${formatUtc(maneuver.burn_time, false).slice(0, 8)}` });
       m.push({ t: maneuver.post_tca_unix, color: '#4ade80', label: `post-burn TCA ${formatUtc(maneuver.post_tca, false).slice(0, 8)}`, hollow: true });
     }
+    // where each ghost meets the debris its burn avoided
+    for (const g of ghosts) m.push({ t: g.crashUnix, color: '#f87171', label: `ghost ${g.index} meets ${g.secondaryName} ${formatUtc(g.crashUnix, false).slice(0, 8)}`, hollow: true });
     return m;
-  }, [conj, maneuver]);
+  }, [conj, maneuver, ghosts]);
   const tToTca = conj ? conj.tca_unix - sim.currentUnix : null;
   const disabled = !scenario;
 
@@ -75,13 +82,14 @@ export default function TimelineBar() {
             {sim.playing ? '❚❚ Pause' : '▶ Play'}
           </Button>
           <label className="sr-only" htmlFor="speed">Simulation speed</label>
-          <select id="speed" value={sim.speed} onChange={(e) => controller.setSpeed(Number(e.target.value))} disabled={disabled} className="rounded border border-line-strong bg-panel-2 px-1.5 py-1 text-[11px] text-text">
+          <select id="speed" value={sim.speed} onChange={(e) => setSpeed(Number(e.target.value))} disabled={disabled} className="rounded border border-line-strong bg-panel-2 px-1.5 py-1 text-[11px] text-text">
             {SPEED_OPTIONS.map((v) => (
               <option key={v} value={v}>
                 {v}×
               </option>
             ))}
           </select>
+          {autoSlow && <Badge tone={autoSlow.kind === 'ghost' ? 'threat' : autoSlow.kind === 'burn' ? 'safe' : 'info'}>{autoSlow.kind === 'ghost' ? 'slow motion · ghost collision' : autoSlow.kind === 'burn' ? 'slow motion · dodge burn' : 'slow motion · pass'}</Badge>}
         </div>
         <div className="relative min-w-0 flex-1 pt-3 pb-2">
           <div className="pointer-events-none absolute left-0 right-0 top-[18px] h-1 rounded bg-line" />

@@ -22,7 +22,8 @@ export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'in
   const candidateTrajectories = useAppStore((s) => s.candidateTrajectories);
   const selectedManeuverId = useAppStore((s) => s.selectedManeuverId);
   const committed = useAppStore((s) => s.simulation?.committed_maneuvers);
-  const previousPrimaryTrajectory = useAppStore((s) => s.previousPrimaryTrajectory);
+  const ghosts = useAppStore((s) => s.ghosts);
+  const insetTarget = useAppStore((s) => s.insetTarget);
   const screening = useAppStore((s) => s.screening);
   const layers = useAppStore((s) => s.layers);
   const cameraResetNonce = useAppStore((s) => s.cameraResetNonce);
@@ -102,8 +103,18 @@ export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'in
   }, [plan, candidateTrajectories, selectedManeuverId, committed]);
 
   useEffect(() => {
-    sceneRef.current?.setCommittedBurns(committed ?? [], previousPrimaryTrajectory);
-  }, [committed, previousPrimaryTrajectory]);
+    sceneRef.current?.setCommittedBurns(committed ?? []);
+  }, [committed]);
+
+  // ghosts of the spacecraft (re-applied after a scenario change cleared the viewer)
+  useEffect(() => {
+    sceneRef.current?.setGhosts(ghosts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ghosts, scenario?.scenario_id, scenario?.simulation.reset_count]);
+
+  useEffect(() => {
+    if (inset) sceneRef.current?.setTrackTarget(insetTarget);
+  }, [insetTarget]);
 
   useEffect(() => {
     sceneRef.current?.setThreats(screening);

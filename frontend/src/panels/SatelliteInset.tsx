@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { insetAlert, type InsetAlert } from '../globe/insetAlert';
 import { useSimulation } from '../hooks/useSimulation';
-import { formatCountdown } from '../lib/format';
+import { formatCountdown, formatUtc } from '../lib/format';
+import { aliveGhosts, formatMiss, ghostLabel, ghostWarning } from '../simulation/ghosts';
 import { useAppStore } from '../store/useAppStore';
 import type { CommittedManeuver } from '../types/api';
 
@@ -24,7 +25,14 @@ const FRAME: Record<InsetAlert['level'], { border: string; glow?: string }> = {
   normal: { border: 'border-line' },
   danger: { border: 'border-threat', glow: 'var(--color-threat)' },
   maneuver: { border: 'border-safe', glow: 'var(--color-safe)' },
+  ghost: { border: 'border-threat', glow: 'var(--color-threat)' },
 };
+
+// The target tabs: the real spacecraft, then one per ghost flying right now.
+const tabClass = (selected: boolean, pulse: boolean) =>
+  `rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-primary ${
+    pulse ? 'border-threat bg-threat/20 text-threat motion-safe:animate-pulse' : selected ? 'border-primary bg-panel/90 text-primary' : 'border-line bg-panel/85 text-muted hover:border-muted'
+  }`;
 
 interface InsetProps {
   /** Places and sizes the corner window. */
@@ -63,6 +71,9 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
   const burnFiring = useAppStore((s) => s.burnFiring);
   const zoomInset = useAppStore((s) => s.zoomInset);
   const resetInset = useAppStore((s) => s.resetInset);
+  const ghosts = useAppStore((s) => s.ghosts);
+  const insetTarget = useAppStore((s) => s.insetTarget);
+  const setInsetTarget = useAppStore((s) => s.setInsetTarget);
   // back from the big view, the close-up returns to its default view of the spacecraft
   const wasExpanded = useRef(false);
   useEffect(() => {
@@ -70,8 +81,15 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
     wasExpanded.current = expanded;
   }, [expanded, resetInset]);
   const now = sim.currentUnix;
+  // ghosts flying at this time, the one the close-up follows, and the one about to collide
+  const alive = aliveGhosts(ghosts, now);
+  const tracked = insetTarget !== 'primary' ? alive.find((g) => g.id === insetTarget) ?? null : null;
+  const warn = ghostWarning(ghosts, now);
+  // the corner is narrow: drop a parenthetical suffix such as "(sandbox junk)" from the debris name
+  const shortName = (name: string) => name.replace(/\s*\(.*\)\s*$/, '');
   const live = insetAlert({
     now,
+    ghost: tracked ? { crashUnix: tracked.crashUnix, missKm: tracked.missKm } : null,
     threats: [
       ...(screening?.conjunctions ?? []).map((c) => ({ tcaUnix: c.tca_unix, critical: c.threat_state === 'CRITICAL', dodgeBurnUnix: null })),
       // screening sees the committed path, where a dodged pass is no longer critical: it stays a threat
@@ -94,7 +112,7 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
     const t = setTimeout(() => setHeld(null), MANEUVER_WALL_HOLD_MS);
     return () => clearTimeout(t);
   }, [held]);
-  const alert = live.level === 'maneuver' ? live : held ?? live;
+  const alert = live.level === 'ghost' || live.level === 'maneuver' ? live : held ?? live;
   const firingManeuver = alert.level === 'maneuver'
     ? committed.find((m) => (burnFiring ? m.maneuver_id === burnFiring.maneuverId : m.burn_time_unix === alert.burnUnix)) ?? null
     : null;
@@ -119,7 +137,37 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
         )}
         <div className={bar}>
           <div className="pointer-events-none flex flex-col items-start gap-0.5">
-            <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted">{name ?? 'Satellite'}</span>
+            {alive.length > 0 ? (
+              <div role="tablist" aria-label="What the close-up follows" className="pointer-events-auto flex flex-wrap items-center gap-1">
+                <button type="button" role="tab" aria-selected={!tracked} onClick={() => setInsetTarget('primary')} title={name ?? 'The spacecraft'} className={tabClass(!tracked, false)}>
+                  {name ? name.split(' ')[0] : 'Satellite'}
+                </button>
+                {alive.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tracked?.id === g.id}
+                    onClick={() => setInsetTarget(g.id)}
+                    title={`${ghostLabel(g)} · meets ${g.secondaryName} at ${formatUtc(g.crashUnix, false).slice(0, 8)} UTC (${formatMiss(g.missKm)})`}
+                    className={tabClass(tracked?.id === g.id, warn?.ghost.id === g.id)}
+                  >
+                    Ghost {g.index}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted">{name ?? 'Satellite'}</span>
+            )}
+            {tracked && <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-primary">Ghost {tracked.index} · no dodge · debris enlarged</span>}
+            {alert.level === 'ghost' && (
+              <span className="rounded bg-threat/90 px-1.5 py-0.5 text-[10px] font-semibold text-bg">
+                {alert.crashed ? `Collision · would have passed ${formatMiss(alert.missKm)}` : `Collision course · ${shortName(tracked?.secondaryName ?? 'debris')}`}
+                <span className="mono block font-normal">
+                  {alert.crashed ? `inside the ${tracked?.criticalRadiusKm ?? 5} km safety radius` : `${formatCountdown(alert.crashUnix - now)} · closest ${formatMiss(alert.missKm)}`}
+                </span>
+              </span>
+            )}
             {alert.level === 'danger' && (
               <span className="rounded bg-threat/90 px-1.5 py-0.5 text-[10px] font-semibold text-bg">
                 Critical debris detected
@@ -176,7 +224,9 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
           </div>
         </div>
         <span className="sr-only" role="status">
-          {alert.level === 'danger' ? 'Critical debris detected' : alert.level === 'maneuver' ? 'Satellite maneuvering to dodge the debris' : ''}
+          {alert.level === 'ghost'
+            ? alert.crashed ? 'The ghost met the debris' : 'The ghost is on a collision course with the debris'
+            : alert.level === 'danger' ? 'Critical debris detected' : alert.level === 'maneuver' ? 'Satellite maneuvering to dodge the debris' : ''}
         </span>
       </div>
     </div>

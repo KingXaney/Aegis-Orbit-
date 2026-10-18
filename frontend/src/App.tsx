@@ -8,6 +8,7 @@ import MissionPanel from './panels/MissionPanel';
 import ObjectInspector from './panels/ObjectInspector';
 import SatelliteInset from './panels/SatelliteInset';
 import DodgeCard from './panels/DodgeCard';
+import GhostWarning from './panels/GhostWarning';
 import TimelineBar from './panels/TimelineBar';
 import TopBar from './panels/TopBar';
 import { controller } from './simulation/controller';
@@ -30,7 +31,10 @@ export default function App() {
   const isSandbox = useAppStore((s) => s.scenario?.kind === 'sandbox');
 
   useEffect(() => {
-    if (import.meta.env.DEV) (window as unknown as { __store?: typeof useAppStore }).__store = useAppStore;
+    if (import.meta.env.DEV) {
+      (window as unknown as { __store?: typeof useAppStore }).__store = useAppStore;
+      (window as unknown as { __controller?: typeof controller }).__controller = controller;
+    }
     void init();
   }, [init]);
 
@@ -66,8 +70,11 @@ export default function App() {
         <SatelliteInset className="pointer-events-none absolute bottom-[112px] right-3 h-[200px] w-[280px]" expandedClassName="absolute inset-0">
           <GlobeView variant="inset" />
         </SatelliteInset>
-        {/* the change of course while a dodge burn is near: above the close-up, bottom right */}
-        <DodgeCard className="pointer-events-auto absolute bottom-[112px] right-3 w-[280px] md:bottom-[320px]" />
+        {/* bottom right, above the close-up: the warning before a ghost's collision and the change of course while a dodge burn is near */}
+        <div className="pointer-events-none absolute bottom-[112px] right-3 flex w-[280px] flex-col gap-2 md:bottom-[320px]">
+          <GhostWarning className="pointer-events-auto" />
+          <DodgeCard className="pointer-events-auto" />
+        </div>
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 flex-col items-start gap-2">

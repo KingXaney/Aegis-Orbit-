@@ -6,7 +6,7 @@ import pytest
 
 from app.data.catalog import Catalog
 from app.physics.frames import rtn_basis
-from app.physics.maneuver_planner import burn_segment, with_segment, without_last_burn
+from app.physics.maneuver_planner import before_burn, burn_segment, with_segment, without_last_burn
 from app.physics.propagation import (MODEL_NUMERICAL, MODEL_PIECEWISE, anchored, anchored_with_state, burn_times,
                                      latest_state, original_of, propagate, propagate_batch, propagate_states, state_at)
 from app.scenarios import synthetic
@@ -130,6 +130,23 @@ def test_without_last_burn_and_original(primary, one_burn, two_burns):
     assert orig.propagation_model == MODEL_NUMERICAL and orig.segments == ()
     assert np.allclose(propagate(orig, times).positions_km, propagate(primary, times).positions_km)
     assert original_of(primary) is primary
+
+
+def test_before_burn_keeps_only_the_earlier_arcs(primary, one_burn, two_burns):
+    """A ghost flies the course before one burn: earlier burns included, that burn and later ones not."""
+    times = T0 + np.arange(0.0, 9000.0, 500.0)
+    second = before_burn(two_burns, "MV-TEST-002")
+    assert len(second.segments) == 1 and burn_times(second) == [T0 + 3000.0]
+    assert np.allclose(propagate(second, times).positions_km, propagate(one_burn, times).positions_km)
+    assert "MV-TEST-002" not in second.position_basis and second.period_s == pytest.approx(one_burn.period_s)
+    first = before_burn(two_burns, "MV-TEST-001")
+    assert first.propagation_model == MODEL_NUMERICAL and first.segments == ()
+    assert np.allclose(propagate(first, times).positions_km, propagate(primary, times).positions_km)
+    with pytest.raises(ValueError):
+        before_burn(two_burns, "MV-NOPE")
+    # the kept arcs stay valid after re-anchoring (the sandbox re-anchors every object periodically)
+    moved = anchored(two_burns, T0 + 3500.0)
+    assert np.abs(propagate(before_burn(moved, "MV-TEST-002"), times).positions_km - propagate(one_burn, times).positions_km).max() < 1e-3
 
 
 def test_summary_lists_burns(two_burns, primary):

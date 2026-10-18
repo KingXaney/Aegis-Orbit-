@@ -80,7 +80,7 @@ export const api = {
     request<{ scenario_id: string; primary_id: string; objects: ObjectSummary[] }>(`/api/objects${qs({ scenario_id: scenarioId })}`),
   objectDetail: (scenarioId: string, objectId: string, at?: string) =>
     request<ObjectDetail>(`/api/objects/${encodeURIComponent(objectId)}${qs({ scenario_id: scenarioId, at })}`),
-  trajectory: (scenarioId: string, objectId: string, opts: { start?: string; end?: string; step_s?: number; maneuver_id?: string; variant?: 'committed' | 'original' } = {}) =>
+  trajectory: (scenarioId: string, objectId: string, opts: { start?: string; end?: string; step_s?: number; maneuver_id?: string; variant?: 'committed' | 'original' | 'before_burn' } = {}) =>
     request<Trajectory>(
       `/api/objects/${encodeURIComponent(objectId)}/trajectory${qs({ scenario_id: scenarioId, ...opts })}`,
     ),

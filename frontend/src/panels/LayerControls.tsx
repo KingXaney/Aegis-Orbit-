@@ -31,7 +31,7 @@ export default function LayerControls() {
       </p>
       <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Layers</div>
       <div className="grid grid-cols-1 gap-1">
-        <Toggle label="Planned & original path" checked={layers.original} onChange={() => toggleLayer('original')} swatch="#2dd4bf" />
+        <Toggle label="Planned path & ghost courses" checked={layers.original} onChange={() => toggleLayer('original')} swatch="#2dd4bf" />
         <Toggle label="Threat object path" checked={layers.secondary} onChange={() => toggleLayer('secondary')} swatch="#f87171" />
         <Toggle label="Candidate maneuvers" checked={layers.candidates} onChange={() => toggleLayer('candidates')} swatch="#4ade80" />
         <Toggle label="TCA markers & danger region" checked={layers.markers} onChange={() => toggleLayer('markers')} swatch="#ef4444" />
@@ -41,7 +41,7 @@ export default function LayerControls() {
         <Toggle label="Labels" checked={layers.labels} onChange={() => toggleLayer('labels')} />
       </div>
       <p className="mt-3 text-[10px] leading-snug text-dim">
-        Spacecraft models are true scale (Follow gets close enough to see them); markers and the danger region are enlarged for visibility. The teal band is the path the spacecraft will fly; dashed cyan is the original path kept for comparison after an approved burn; green bands are candidate burns; dim solid trails are past motion.
+        Spacecraft models are true scale (Follow gets close enough to see them); markers and the danger region are enlarged for visibility. The teal band is the path the spacecraft will fly; dashed cyan is a ghost's course, the path not taken after a committed burn, flown by a translucent ghost until the pass the burn avoided; green bands are candidate burns; dim solid trails are past motion.
         {scenario?.kind === 'real'
           ? ' Positions are SGP4 estimates from public elements, not sensor telemetry.'
           : scenario?.kind === 'sandbox'

@@ -48,6 +48,9 @@ class CommittedBurn:
     secondary_check_status: Optional[str]
     meets_target: bool
     target_basis: str
+    # The pass this burn was taken for, as screened before it (secondary, pre-burn TCA and miss): the
+    # course a ghost of the spacecraft flies into. See service._avoided_pass.
+    avoided_pass: Optional[Dict[str, Any]] = None
 
     @property
     def maneuver_id(self) -> str:
@@ -67,6 +70,7 @@ class CommittedBurn:
             "secondary_check_status": self.secondary_check_status,
             "meets_target": self.meets_target,
             "target_basis": self.target_basis,
+            "avoided_pass": self.avoided_pass,
             "fired": bool(clock_unix is not None and self.burn_time_unix <= clock_unix),
         })
         return d

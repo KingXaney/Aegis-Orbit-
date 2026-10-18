@@ -21,7 +21,7 @@ environment.
 7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
 8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed. On the real ISS scenario the mission page plays it as a funnel over the full 18,598-object catalog and ends in an operator decision (see Scenario A).
 9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
-10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path.
+10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path. Each committed burn leaves a translucent **ghost** of the spacecraft flying the course it did not take until the pass the burn avoided; the close-up follows a ghost on request, the clock slows down before its collision and a warning shows what would have happened (with the true miss distance).
 11. Offers a live **sandbox** (Scenario C): the clock runs open-ended, you drop space junk onto the orbit (three kinds with different pass distances), and an **autopilot** screens it, plans a burn that meets both the probability and the 5 km distance target, secondary-checks it and flies it, with the spacecraft's thrusters firing on the model when the burn happens.
 
 ## Stack
@@ -114,7 +114,7 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 8.2 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. On the globe, the red marker, danger region and miss vector appear at the predicted TCA; the timeline shows a TCA tick and a countdown. Scrub toward the TCA to watch the debris close on the spacecraft.
 3. Click **Analyze with agent**. The agent calls `list_conjunctions → get_conjunction_details → plan_maneuvers → check_secondary ×3 → generate_report`; the tool execution history, validation checks and narrative appear in the panel. Three candidate burns are drawn in green; the recommended one is highlighted.
 4. Compare candidates in the table and chart (Δv, post-burn miss distance, post-burn Pc, target met, secondary screening status). Click a row or a green path to select it; **Jump to burn** moves the clock to the burn.
-5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision and commits the burn into the spacecraft's trajectory: the teal band now bends at the burn, the path before it stays dashed cyan for one orbit for comparison, and in the **Follow** view the thrusters fire (a plume on the nozzle opposite to the Δv) when the clock reaches the burn; from the World view a flare marks it. Burns are append-only in time, so later passes are handled in order; the next critical pass is selected for you. **Withdraw** (in Human decision) takes the latest unfired burn back out. **Reset** returns the scenario to the identical initial state.
+5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision and commits the burn into the spacecraft's trajectory: the teal band now bends at the burn, a translucent **ghost** of the spacecraft departs along the dashed cyan course it did not take (the close-up gets a tab for it), and in the **Follow** view the thrusters fire (a plume on the nozzle opposite to the Δv) when the clock reaches the burn; from the World view a flare marks it. A minute before the ghost reaches the debris the clock slows to 10× and then 1×, a **Ghost collision ahead** card counts down bottom right and the close-up switches to the ghost; at the pre-burn closest approach (354 m here, inside the 5 km safety radius) an impact flash plays and the ghost is deleted. Scrubbing back brings it back. Burns are append-only in time, so later passes are handled in order; the next critical pass is selected for you. **Withdraw** (in Human decision) takes the latest unfired burn back out. **Reset** returns the scenario to the identical initial state.
 
 ### Scenario A — real GP data and the ML perception funnel
 
@@ -164,11 +164,18 @@ a **Space junk** tray:
   the corner close-up shows the thruster plume and the delta-v arrow, and a **Dodge burn** card bottom right
   explains the change of course: which nozzle fires, the delta-v, the pass before and after, and a diagram of
   the velocity before and after the burn. From the World view a flare marks the burn on the orbit.
+* Every dodge leaves a **ghost**: a translucent copy of the spacecraft flying the course without that burn, its
+  dashed cyan path leading to the debris. The close-up grows a tab per ghost. A minute before a ghost meets its
+  debris the clock slows, a **Ghost collision ahead** card counts down bottom right and the close-up switches to
+  the ghost; at the collision (the pre-burn closest approach, a few hundred metres) a flash plays and the ghost is
+  deleted. Several dodges in a row mean several ghosts, each flying the course with the earlier burns only.
 * The corner close-up zooms (wheel, pinch or its + / − buttons) and orbits the spacecraft when dragged, so a
   dodge can be watched from any angle; **⟲** puts it back on its default view, **Expand** fills the stage with
   it, and shrinking it back to the corner resets the view too.
 * Junk within 30 km of the spacecraft is drawn enlarged so you can see it go by; its label gives the true size,
-  the distance and the enlargement. Once a pass is over, its markers go and the next threat is selected.
+  the distance and the enlargement. Once a pass is over, its markers go and the next threat is selected. In the
+  close-up, junk on a collision course with what it follows (the spacecraft, or a ghost) is drawn as a model from
+  100 km out, with a red halo, a kind glyph while it is still too small to see, and an arrow toward its target.
 * The session outlives the page: a reload resumes the clock where the backend last saw it, junk and burns included.
 
 ## Architecture
@@ -211,7 +218,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `POST /api/scenarios/{id}/drill` | Real scenario only: inject one labelled drill threat (`DRILL-1`) at `now` and re-screen; reset removes it |
 | `GET /api/objects?scenario_id=` | Catalog with provenance and uncertainty metadata |
 | `GET /api/objects/{id}?scenario_id=&at=` | Object detail with state (TEME, geodetic, osculating elements) at a time |
-| `GET /api/objects/{id}/trajectory?scenario_id=&start=&end=&step_s=&maneuver_id=&variant=` | Trajectory samples. The primary's default is its **committed** path (burns included, `burn_times_unix`, one segment per arc); `maneuver_id` previews a candidate on top of it; `variant=original` leaves the burns out. Samples before a spawned object existed are `null` |
+| `GET /api/objects/{id}/trajectory?scenario_id=&start=&end=&step_s=&maneuver_id=&variant=` | Trajectory samples. The primary's default is its **committed** path (burns included, `burn_times_unix`, one segment per arc); `maneuver_id` previews a candidate on top of it; `variant=original` leaves the burns out; `variant=before_burn` with the `maneuver_id` of a committed burn is the course before that burn (what its ghost flies). Samples before a spawned object existed are `null` |
 | `POST /api/objects/trajectories` | Batch trajectories (same rules) |
 | `POST /api/conjunctions/screen` | Screen the primary (`pc_policy`: `provided_only` \| `illustrative_default`) |
 | `GET /api/conjunctions?scenario_id=`, `GET /api/conjunctions/{id}` | Current screening results / full conjunction record |
@@ -259,6 +266,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * No public conjunction-message feed (e.g. SOCRATES/CDMs) is integrated; all conjunctions come from the local screening.
 * Single-user in-memory sessions; restarting the backend clears screenings, plans, decisions, spawned junk and committed burns (the scenario definitions are deterministic and reload identically).
 * The sandbox autopilot works with the same grid planner: with little warning only large burns (up to 5 m/s) clear the 5 km target, so a piece dropped minutes ahead costs far more Δv than a real operator would spend, or is reported as unavoidable. The backend has no clock of its own; the browser sends the simulation time with every sandbox call.
+* A ghost's "collision" is the screened pre-burn closest approach, typically a few hundred metres; no physical impact is modelled and the number is always shown.
 * The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
 

@@ -7,6 +7,10 @@ import { NOZZLE_FACES, plumeSpec, rcsNozzles, type NozzleFace } from './thruster
 /** Smallest on-screen size (pixels across the envelope) at which the 3D model replaces the marker. */
 const MIN_MODEL_PIXELS = 6;
 const PLUME_COLOR = Cesium.Color.fromCssColorString('#a3e635');
+/** Ghost look: the parts and the glTF tinted toward the path cyan and made translucent. */
+const GHOST_TINT = Cesium.Color.fromCssColorString('#67e8f9');
+const GHOST_ALPHA = 0.45;
+const GHOST_MIX = 0.55;
 const PLUME_CORE_COLOR = Cesium.Color.fromCssColorString('#f7fee7');
 
 const AXIS_ROTATION: Record<Axis, Cesium.Matrix3> = {
@@ -15,9 +19,10 @@ const AXIS_ROTATION: Record<Axis, Cesium.Matrix3> = {
   y: Cesium.Matrix3.fromRotationX(-Cesium.Math.PI_OVER_TWO), // cylinder +z -> +y
 };
 
-function partInstance(part: Part): Cesium.GeometryInstance {
+function partInstance(part: Part, tint?: Cesium.Color): Cesium.GeometryInstance {
   const vertexFormat = Cesium.PerInstanceColorAppearance.VERTEX_FORMAT;
-  const color = Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.fromCssColorString(PART_COLORS[part.color]));
+  const base = Cesium.Color.fromCssColorString(PART_COLORS[part.color]);
+  const color = Cesium.ColorGeometryInstanceAttribute.fromColor(tint ? Cesium.Color.lerp(base, tint, GHOST_MIX, new Cesium.Color()).withAlpha(GHOST_ALPHA) : base);
   const center = new Cesium.Cartesian3(...part.center);
   if (part.kind === 'box') {
     return new Cesium.GeometryInstance({
@@ -89,6 +94,8 @@ function setPlumeColor(primitive: Cesium.Primitive, color: Cesium.Color, alpha: 
 export interface SpacecraftModelOptions {
   /** Draw reaction-control nozzles on the core faces and a plume when a burn fires. */
   rcs?: boolean;
+  /** A translucent, cyan-tinted copy: the ghost that flies the course not taken. */
+  ghost?: boolean;
 }
 
 /**
@@ -108,6 +115,7 @@ export class SpacecraftModel {
   private primitive: Cesium.Primitive | null;
   private gltf: Cesium.Model | null = null;
   private gltfScale = 1;
+  private readonly ghost: boolean;
   private destroyed = false;
   private readonly matrix = new Cesium.Matrix4();
   private readonly scaledMatrix = new Cesium.Matrix4();
@@ -127,10 +135,12 @@ export class SpacecraftModel {
     this.scene = scene;
     this.design = design;
     this.envelopeRadiusM = 0.5 * Math.hypot(design.length_m, design.width_m, design.height_m);
+    this.ghost = !!options.ghost;
+    const tint = this.ghost ? GHOST_TINT : undefined;
     this.primitive = scene.primitives.add(
       new Cesium.Primitive({
-        geometryInstances: designParts(design).map(partInstance),
-        appearance: new Cesium.PerInstanceColorAppearance({ translucent: false, closed: true }),
+        geometryInstances: designParts(design).map((part) => partInstance(part, tint)),
+        appearance: new Cesium.PerInstanceColorAppearance({ translucent: this.ghost, closed: true }),
         asynchronous: false,
         show: false,
       }),
@@ -166,6 +176,11 @@ export class SpacecraftModel {
         model.destroy();
         return;
       }
+      if (this.ghost) {
+        model.color = GHOST_TINT.withAlpha(GHOST_ALPHA);
+        model.colorBlendMode = Cesium.ColorBlendMode.MIX;
+        model.colorBlendAmount = GHOST_MIX;
+      }
       this.gltf = this.scene.primitives.add(model);
       this.gltfScale = scale;
       Cesium.Matrix4.fromUniformScale(scale, this.scaleMatrix);
@@ -186,6 +201,11 @@ export class SpacecraftModel {
   /** On-screen size of the envelope (pixels) at a camera distance, drawn at `scale`. */
   pixelsAcross(distanceM: number, scale = 1): number {
     return (2 * this.envelopeRadiusM * scale) / (Math.max(distanceM, 1e-3) * this.radiansPerPixel());
+  }
+
+  /** How many metres one screen pixel covers at a camera distance. */
+  metresPerPixelAt(distanceM: number): number {
+    return Math.max(distanceM, 1e-3) * this.radiansPerPixel();
   }
 
   /** Largest camera distance at which the envelope spans MIN_MODEL_PIXELS on screen. */

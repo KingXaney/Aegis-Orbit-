@@ -1,5 +1,6 @@
 import { controller, SPEED_OPTIONS } from '../simulation/controller';
 import { nextEvent } from '../simulation/events';
+import { ghostCrashEvents } from '../simulation/ghosts';
 import { useSimulation } from '../hooks/useSimulation';
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Button } from '../components/ui';
@@ -14,6 +15,7 @@ export default function ClockControls() {
   const scenario = useAppStore((s) => s.scenario);
   const screening = useAppStore((s) => s.screening);
   const committed = useAppStore((s) => s.simulation?.committed_maneuvers);
+  const ghosts = useAppStore((s) => s.ghosts);
   const setSpeed = useAppStore((s) => s.setSpeed);
   const slowForPasses = useAppStore((s) => s.slowForPasses);
   const setSlowForPasses = useAppStore((s) => s.setSlowForPasses);
@@ -21,7 +23,7 @@ export default function ClockControls() {
   const autoSlow = useAppStore((s) => s.autoSlow);
   const busy = useAppStore((s) => s.sandbox.evaluateInFlight || s.sandbox.spawnInFlight);
   const disabled = !scenario;
-  const next = nextEvent(screening, committed, sim.currentUnix);
+  const next = nextEvent(screening, committed, sim.currentUnix, ghostCrashEvents(ghosts, sim.currentUnix));
   const nextDt = next ? next.atUnix - sim.currentUnix : null;
 
   return (
@@ -47,7 +49,7 @@ export default function ClockControls() {
       <div className="flex min-w-0 flex-col leading-tight" aria-live="polite">
         <span className="text-[9px] uppercase tracking-wider text-dim">Next event</span>
         {next && nextDt !== null ? (
-          <span className={`truncate text-[11px] ${next.kind === 'burn' ? 'text-[#a3e635]' : next.critical || nextDt < 900 ? 'text-threat' : 'text-tracked'}`}>
+          <span className={`truncate text-[11px] ${next.kind === 'burn' ? 'text-[#a3e635]' : next.kind === 'ghost' || next.critical || nextDt < 900 ? 'text-threat' : 'text-tracked'}`}>
             <span className="mono">{formatCountdown(nextDt)}</span> · {next.label}
           </span>
         ) : (
@@ -58,7 +60,11 @@ export default function ClockControls() {
         <input type="checkbox" className="accent-[var(--color-primary)]" checked={slowForPasses} onChange={(e) => setSlowForPasses(e.target.checked)} />
         Slow down for passes
       </label>
-      {autoSlow && <Badge tone={autoSlow.kind === 'burn' ? 'safe' : 'info'}>{autoSlow.kind === 'burn' ? 'slow motion · dodge burn' : 'slow motion · pass'}</Badge>}
+      {autoSlow && (
+        <Badge tone={autoSlow.kind === 'burn' ? 'safe' : autoSlow.kind === 'ghost' ? 'threat' : 'info'}>
+          {autoSlow.kind === 'burn' ? 'slow motion · dodge burn' : autoSlow.kind === 'ghost' ? 'slow motion · ghost collision' : 'slow motion · pass'}
+        </Badge>
+      )}
       {busy && <Badge tone="info">autopilot thinking…</Badge>}
       {dataStall && <Badge tone="warn">buffering orbit data…</Badge>}
     </div>

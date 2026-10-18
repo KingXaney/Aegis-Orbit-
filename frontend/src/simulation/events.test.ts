@@ -45,6 +45,28 @@ describe('eventWithin', () => {
     expect(eventWithin(scr, [], 1000, 60)).toMatchObject({ id: 'far' });
     expect(eventWithin(null, null, 1000, 60)).toBeNull();
   });
+
+  it('lets a ghost collision outrank a pass or a burn inside the window', () => {
+    const ghost = { id: 'g1', atUnix: 1120, missKm: 0.35, label: 'ghost meets Junk (350 m)' };
+    expect(eventWithin(null, null, 1100, 60, 10, [ghost])).toMatchObject({ kind: 'ghost', id: 'g1', missKm: 0.35 });
+    expect(eventWithin(null, null, 1000, 60, 10, [ghost])).toBeNull();
+    // the spacecraft's own pass with the same debris comes within seconds of the ghost's collision
+    const scr = screening(conj('near', 1105, 2));
+    expect(eventWithin(scr, [], 1100, 60, 10, [ghost])).toMatchObject({ kind: 'ghost' });
+    expect(eventWithin(scr, [burn('m', 1101)], 1100, 60, 10, [ghost])).toMatchObject({ kind: 'ghost' });
+    // out of the ghost's window, the pass is the event
+    expect(eventWithin(scr, [], 1050, 60, 10, [ghost])).toMatchObject({ kind: 'tca', id: 'near' });
+    // two ghosts: the nearer one
+    expect(eventWithin(null, null, 1100, 60, 10, [ghost, { ...ghost, id: 'g2', atUnix: 1110 }])).toMatchObject({ id: 'g2' });
+  });
+});
+
+describe('nextEvent with ghosts', () => {
+  it('lists the soonest ghost collision ahead', () => {
+    const ghost = { id: 'g1', atUnix: 1120, missKm: 0.35, label: 'ghost meets Junk (350 m)' };
+    expect(nextEvent(null, [burn('m', 1500)], 1000, [ghost])).toMatchObject({ kind: 'ghost', id: 'g1', label: 'ghost meets Junk (350 m)', critical: true });
+    expect(nextEvent(null, [burn('m', 1500)], 1130, [ghost])).toMatchObject({ kind: 'burn' });
+  });
 });
 
 describe('passWithin', () => {

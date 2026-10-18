@@ -31,7 +31,7 @@ from ..physics.time_utils import iso, parse_iso, time_grid, to_unix
 from .session import CommittedBurn, SimulationSession
 
 MAX_TRAJECTORY_SAMPLES = 20000
-TRAJECTORY_VARIANTS = ("committed", "original")
+TRAJECTORY_VARIANTS = ("committed", "original", "before_burn")
 
 
 class NotFound(KeyError):
@@ -198,7 +198,9 @@ def trajectory(sess: SimulationSession, object_id: str, start: Optional[str] = N
                step_s: float = 60.0, maneuver_id: Optional[str] = None, variant: Optional[str] = None) -> Dict[str, Any]:
     """Sampled TEME trajectory. The primary's default is its *committed* path (burns included);
     ``variant=original`` gives the path without burns; ``maneuver_id`` previews a candidate on top
-    of the committed path (or returns the committed path when that burn is already committed)."""
+    of the committed path (or returns the committed path when that burn is already committed);
+    ``variant=before_burn`` with the ``maneuver_id`` of a committed burn gives the course the primary
+    was on before that burn (earlier burns included), which its ghost flies."""
     obj = _require_object(sess, object_id)
     scen = sess.scenario
     t0 = _parse_time(start, scen.start_unix)
@@ -212,7 +214,22 @@ def trajectory(sess: SimulationSession, object_id: str, start: Optional[str] = N
     settings = get_settings()
     cand = None
     kind = "original"
-    if variant == "original":
+    if variant == "before_burn":
+        if object_id != scen.primary_id:
+            raise BadRequest("variant=before_burn exists only for the primary object")
+        if not maneuver_id:
+            raise BadRequest("variant=before_burn needs the maneuver_id of a committed burn")
+        cand = sess.maneuvers.get(maneuver_id)
+        if cand is None:
+            raise NotFound(f"maneuver '{maneuver_id}' not found in this session")
+        if not sess.is_committed(maneuver_id):
+            raise BadRequest(f"maneuver {maneuver_id} is not committed; only committed burns have a before-burn path")
+        try:
+            obj = mp.before_burn(obj, maneuver_id)
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from exc
+        kind = "before_burn"
+    elif variant == "original":
         obj = original_of(obj)
     else:
         if obj.segments:
@@ -449,6 +466,32 @@ def run_secondary_check(sess: SimulationSession, maneuver_id: str,
 # committing burns (human approval and the sandbox autopilot)
 # --------------------------------------------------------------------------
 
+def _avoided_pass(sess: SimulationSession, cand, conj) -> Dict[str, Any]:
+    """The pass a burn is taken for, as screened before the burn: the course the spacecraft's ghost flies
+    into. ``conj`` is that screened conjunction when the session still has it (the usual case); the
+    candidate alone carries the pre-burn TCA (burn time + lead) and the screened miss distance."""
+    scen = sess.scenario
+    tca = float(cand.burn_time_unix + cand.lead_time_s)  # the planner measures the lead from the screened TCA
+    secondary_id = conj.secondary_id if conj is not None else screening.secondary_from_conjunction_id(cand.conjunction_id, scen.primary_id)
+    sec = None
+    if secondary_id:
+        sec = scen.catalog.get(secondary_id) or scen.catalog.get(f"NORAD-{secondary_id}")
+        if sec is not None:
+            secondary_id = sec.object_id
+    return {
+        "conjunction_id": cand.conjunction_id,
+        "secondary_id": secondary_id,
+        "secondary_name": sec.name if sec is not None else None,
+        "tca": iso(tca), "tca_unix": tca,
+        "miss_km": float(cand.screening_miss_distance_km),
+        "relative_speed_kms": float(conj.relative_speed_kms) if conj is not None else None,
+        "threat_state": conj.threat_state if conj is not None else None,
+        "ghost_r_km": [float(x) for x in conj.primary_r_km] if conj is not None else None,
+        "secondary_r_km": [float(x) for x in conj.secondary_r_km] if conj is not None else None,
+        "basis": "screening" if conj is not None else "candidate",
+    }
+
+
 def commit(sess: SimulationSession, maneuver_id: str, now_unix: Optional[float] = None,
            source: str = "human") -> Dict[str, Any]:
     """Make a candidate burn part of the primary's trajectory.
@@ -483,7 +526,8 @@ def commit(sess: SimulationSession, maneuver_id: str, now_unix: Optional[float] 
         except ValueError as exc:
             raise Conflict(str(exc)) from exc
         conj = sess.conjunctions.get(cand.conjunction_id)
-        secondary_id = conj.secondary_id if conj else None
+        avoided = _avoided_pass(sess, cand, conj)
+        secondary_id = avoided["secondary_id"]
         scen.catalog.replace(committed_primary)
         sess.primary_version += 1
         decision = sess.record_decision("APPROVED" if source == "human" else "AUTOPILOT_COMMITTED", maneuver_id,
@@ -491,7 +535,8 @@ def commit(sess: SimulationSession, maneuver_id: str, now_unix: Optional[float] 
         ok, basis = meets_mitigation_target(cand.post_miss_distance_km, cand.post_pc, settings,
                                             require_distance=prof.require_distance_target)
         at = now_unix if now_unix is not None else sess.clock_unix
-        sess.committed.append(CommittedBurn(cand, source, decision["at"], at, check["validation_status"], bool(ok), basis))
+        sess.committed.append(CommittedBurn(cand, source, decision["at"], at, check["validation_status"], bool(ok), basis,
+                                            avoided_pass=avoided))
         who = "Autopilot" if source == "autopilot" else "Operator"
         sess.add_event("COMMITTED",
                        f"{who} committed {maneuver_id}: {cand.direction} {cand.dv_magnitude_mps:g} m/s at "

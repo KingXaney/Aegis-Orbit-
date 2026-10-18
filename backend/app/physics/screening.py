@@ -208,6 +208,18 @@ def conjunction_id_for(primary_id: str, secondary_id: str, tca_unix: float) -> s
     return f"CJ-{short(primary_id)}-{short(secondary_id)}-{int(round(tca_unix))}"
 
 
+def secondary_from_conjunction_id(conjunction_id: str, primary_id: str) -> Optional[str]:
+    """The secondary embedded in an id from ``conjunction_id_for`` (as written there: a NORAD- prefix is
+    stripped, so callers look the catalog up with and without it), or None when the id has another shape."""
+    prefix = f"CJ-{primary_id.replace('NORAD-', '')}-"
+    if not conjunction_id.startswith(prefix):
+        return None
+    secondary, sep, tail = conjunction_id[len(prefix):].rpartition("-")
+    if not sep or not secondary or not tail.lstrip("-").isdigit():
+        return None
+    return secondary
+
+
 # --------------------------------------------------------------------------
 # main entry point
 # --------------------------------------------------------------------------

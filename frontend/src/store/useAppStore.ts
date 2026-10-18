@@ -1,9 +1,21 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
-import type { CameraMode, LayerFlags, PreviousPath } from '../globe/scene';
+import { detectionRadii } from '../globe/detectionRadius';
+import type { CameraMode, LayerFlags } from '../globe/scene';
 import { nextThreat } from '../lib/nextThreat';
 import { SPEED_OPTIONS, controller, type ControllerState } from '../simulation/controller';
 import { eventWithin } from '../simulation/events';
+import {
+  GHOST_MAX_ATTEMPTS,
+  aliveGhosts,
+  crashPointOf,
+  expiredGhostIds,
+  ghostCrashEvents,
+  ghostFetchRange,
+  ghostWarning,
+  ghostsFromCommitted,
+  type Ghost,
+} from '../simulation/ghosts';
 import { KEEP_BEHIND_ORBITS, extensionNeeded, mergeTrajectory, nextChunk, stalled, trimTrajectory } from '../simulation/rolling';
 import { SLOW_FAR_S, SLOW_MAX_MISS_KM, earliestBurnAfterS, shouldEvaluate, slowSpeedFor } from '../sandbox/schedule';
 import { junkKindInfo } from '../sandbox/junkKinds';
@@ -35,6 +47,8 @@ const STEP_SYNTHETIC_S = 60;
 const TRAIL_FRACTION = 0.25;
 /** A pass is over this long after its closest approach: the selection moves on to the next threat. */
 const PASS_DONE_S = 90;
+/** One shared empty list, so an untouched ghost slice keeps its identity across renders. */
+const NO_GHOSTS: Ghost[] = [];
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.status === 0 ? e.message : `${e.message} (HTTP ${e.status})`;
@@ -91,12 +105,16 @@ export interface AppState {
   /** The clock caught up with the loaded data and waits for the next chunk. */
   dataStall: boolean;
   pausedForData: boolean;
-  /** The primary's path before its latest committed burn (the dashed original on the globe). */
-  previousPrimaryTrajectory: PreviousPath | null;
+  /** Ghosts of the spacecraft: one per committed burn, flying the course it did not take (simulation/ghosts.ts). */
+  ghosts: Ghost[];
+  /** What the corner close-up follows: the real spacecraft, or a ghost by its burn id. */
+  insetTarget: 'primary' | string;
+  /** The ghost the close-up switched to by itself when its collision warning began (once per ghost). */
+  ghostAutoSwitched: string | null;
   /** A committed burn is firing on the main globe right now. */
   burnFiring: { maneuverId: string } | null;
   /** Slow motion around a pass or a burn is holding the speed down; the user's speed is restored afterwards. */
-  autoSlow: { restoreSpeed: number; eventId: string; kind: 'burn' | 'tca' } | null;
+  autoSlow: { restoreSpeed: number; eventId: string; kind: 'burn' | 'tca' | 'ghost' } | null;
   /** An event (pass or burn) the user overrode the slow motion for. */
   autoSlowSkip: string | null;
   /** The corner close-up's zoom requests (factor > 1 zooms in); the nonce makes each press count. */
@@ -169,8 +187,13 @@ export interface AppState {
   /** The work of onClockTick (separate so a tick caused by a tick is ignored). */
   liveTick: (state: ControllerState) => void;
   extendTrajectories: () => Promise<void>;
-  /** Re-read the primary's path (its committed burns included); `replacedAtBurnUnix` keeps the old path as the dashed original. */
-  refreshPrimaryTrajectory: (replacedAtBurnUnix: number | null) => Promise<void>;
+  /** Re-read the primary's path (its committed burns included). */
+  refreshPrimaryTrajectory: () => Promise<void>;
+  /** Derive the ghosts from the committed burns and fetch the courses that are still missing. */
+  syncGhosts: () => void;
+  fetchGhostTrajectory: (id: string) => Promise<void>;
+  /** Point the corner close-up at the real spacecraft ('primary') or at a ghost. */
+  setInsetTarget: (target: 'primary' | string) => void;
   evaluateSandbox: (trigger: 'load' | 'tick' | 'spawn' | 'autopilot' | 'manual') => Promise<void>;
   spawnJunk: (kind: JunkKind, opts?: { timeToTcaS?: number }) => Promise<void>;
   spawnRandom: (count: number) => Promise<void>;
@@ -199,7 +222,9 @@ const EMPTY_SESSION = {
   decisionError: null,
   selectedObjectId: null,
   objectDetail: null,
-  previousPrimaryTrajectory: null,
+  ghosts: NO_GHOSTS,
+  insetTarget: 'primary' as const,
+  ghostAutoSwitched: null,
   burnFiring: null,
   autoSlow: null,
   autoSlowSkip: null,
@@ -308,7 +333,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   rollingRetryAtMs: 0,
   dataStall: false,
   pausedForData: false,
-  previousPrimaryTrajectory: null,
+  ghosts: NO_GHOSTS,
+  insetTarget: 'primary',
+  ghostAutoSwitched: null,
   burnFiring: null,
   autoSlow: null,
   autoSlowSkip: null,
@@ -402,6 +429,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           : EMPTY_SANDBOX,
       });
       rememberScenarioInUrl(id);
+      get().syncGhosts();
       if (sandbox) {
         // live from the first frame: the spacecraft is already orbiting when the page opens
         controller.setSpeed(readSpeed());
@@ -578,8 +606,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const res = await api.approve(scenarioId, maneuverId);
       const checks = res.secondary_check ? { ...get().secondaryChecks, [maneuverId]: res.secondary_check } : get().secondaryChecks;
       set({ simulation: res.simulation, secondaryChecks: checks, decisionLoading: false });
-      // The burn is now part of the trajectory: the globe draws the committed path, the old one stays dashed.
-      await get().refreshPrimaryTrajectory(res.maneuver?.burn_time_unix ?? null);
+      get().syncGhosts();
+      // The burn is now part of the trajectory: the globe draws the committed path, a ghost keeps the old one.
+      await get().refreshPrimaryTrajectory();
       // Commit re-screens against the new path (ids can change) and candidates planned before it are stale.
       try {
         const scr = await api.conjunctions(scenarioId);
@@ -608,8 +637,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       const res = await api.reject(scenarioId, maneuverId, reason);
       set({ simulation: res.simulation, decisionLoading: false });
+      get().syncGhosts();
       if (wasCommitted) {
-        await get().refreshPrimaryTrajectory(null);
+        await get().refreshPrimaryTrajectory();
         try {
           const scr = await api.conjunctions(scenarioId);
           set({ screening: scr, selectedConjunctionId: nextThreat(scr.conjunctions, res.simulation.burn_times_unix ?? [], controller.currentUnix) });
@@ -665,42 +695,64 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   liveTick: (st) => {
     const s = get();
-    if (!s.sandbox.enabled || !s.scenario) return;
+    if (!s.scenario) return;
     const now = st.currentUnix;
-    const period = primaryPeriod(s);
-    if (s.dataWindow) {
-      if (st.playing && stalled(now, s.dataWindow.endUnix)) {
-        controller.pause();
-        set({ dataStall: true, pausedForData: true });
+    if (s.sandbox.enabled) {
+      const period = primaryPeriod(s);
+      if (s.dataWindow) {
+        if (st.playing && stalled(now, s.dataWindow.endUnix)) {
+          controller.pause();
+          set({ dataStall: true, pausedForData: true });
+        }
+        if (extensionNeeded(now, st.speed, s.dataWindow.endUnix, period)) void s.extendTrajectories();
       }
-      if (extensionNeeded(now, st.speed, s.dataWindow.endUnix, period)) void s.extendTrajectories();
+      const sb = s.sandbox;
+      if (shouldEvaluate({ enabled: sb.enabled, inFlight: sb.evaluateInFlight, nowUnix: now, lastEvaluatedUnix: sb.lastEvaluatedUnix, screeningEndUnix: sb.screeningEndUnix, periodS: period, lastEvaluateRealMs: sb.lastEvaluateRealMs, realNowMs: performance.now() })) {
+        void s.evaluateSandbox('tick');
+      }
+      // a pass that is over no longer deserves the spotlight: move the selection on
+      const selected = s.selectedConjunction();
+      if (selected && selected.tca_unix < now - PASS_DONE_S && s.screening) {
+        const upcoming = s.screening.conjunctions.filter((c) => c.tca_unix > now);
+        const next = nextThreat(upcoming, s.simulation?.burn_times_unix ?? [], now);
+        set({ selectedConjunctionId: next !== selected.conjunction_id ? next : null });
+      }
     }
-    const sb = s.sandbox;
-    if (shouldEvaluate({ enabled: sb.enabled, inFlight: sb.evaluateInFlight, nowUnix: now, lastEvaluatedUnix: sb.lastEvaluatedUnix, screeningEndUnix: sb.screeningEndUnix, periodS: period, lastEvaluateRealMs: sb.lastEvaluateRealMs, realNowMs: performance.now() })) {
-      void s.evaluateSandbox('tick');
+    // Ghosts: an open-ended clock forgets a ghost once its collision is over (a bounded one can scrub
+    // back to it); the close-up switches to a ghost when its warning begins, once, and comes back to
+    // the spacecraft whenever the ghost it follows is not flying at this time.
+    const expired = expiredGhostIds(s.ghosts, now, st.openEnded);
+    if (expired.length) {
+      const gone = new Set(expired);
+      set({ ghosts: s.ghosts.filter((g) => !gone.has(g.id)), insetTarget: gone.has(s.insetTarget) ? 'primary' : s.insetTarget });
     }
-    // a pass that is over no longer deserves the spotlight: move the selection on
-    const selected = s.selectedConjunction();
-    if (selected && selected.tca_unix < now - PASS_DONE_S && s.screening) {
-      const upcoming = s.screening.conjunctions.filter((c) => c.tca_unix > now);
-      const next = nextThreat(upcoming, s.simulation?.burn_times_unix ?? [], now);
-      set({ selectedConjunctionId: next !== selected.conjunction_id ? next : null });
+    let cur = get();
+    const warn = ghostWarning(cur.ghosts, now);
+    if (warn?.phase === 'warning' && cur.insetTarget === 'primary' && cur.ghostAutoSwitched !== warn.ghost.id) {
+      set({ insetTarget: warn.ghost.id, ghostAutoSwitched: warn.ghost.id });
+    } else if (cur.insetTarget !== 'primary' && !aliveGhosts(cur.ghosts, now).some((g) => g.id === cur.insetTarget)) {
+      set({ insetTarget: 'primary' });
     }
-    // slow motion around a dodge burn or a close pass
-    const ev = s.slowForPasses ? eventWithin(s.screening, s.simulation?.committed_maneuvers, now, SLOW_FAR_S, SLOW_MAX_MISS_KM) : null;
-    const eligible = ev && ev.id !== s.autoSlowSkip ? ev : null;
+    cur = get();
+    // slow motion around a dodge burn, a close pass or a ghost's collision (outside the sandbox: ghosts only)
+    const crashes = ghostCrashEvents(cur.ghosts, now);
+    const inSandbox = cur.sandbox.enabled;
+    const ev = cur.slowForPasses
+      ? eventWithin(inSandbox ? cur.screening : null, inSandbox ? cur.simulation?.committed_maneuvers : null, now, SLOW_FAR_S, SLOW_MAX_MISS_KM, crashes)
+      : null;
+    const eligible = ev && ev.id !== cur.autoSlowSkip ? ev : null;
     if (eligible) {
-      const base = s.autoSlow?.restoreSpeed ?? st.speed;
+      const base = cur.autoSlow?.restoreSpeed ?? st.speed;
       const target = slowSpeedFor(eligible.atUnix - now, base);
       if (target !== null) {
-        if (!s.autoSlow || s.autoSlow.eventId !== eligible.id) set({ autoSlow: { restoreSpeed: s.autoSlow?.restoreSpeed ?? st.speed, eventId: eligible.id, kind: eligible.kind } });
+        if (!cur.autoSlow || cur.autoSlow.eventId !== eligible.id) set({ autoSlow: { restoreSpeed: cur.autoSlow?.restoreSpeed ?? st.speed, eventId: eligible.id, kind: eligible.kind } });
         if (st.speed !== target) controller.setSpeed(target);
         return;
       }
     }
-    if (s.autoSlow) {
+    if (cur.autoSlow) {
       set({ autoSlow: null });
-      controller.setSpeed(s.autoSlow.restoreSpeed);
+      controller.setSpeed(cur.autoSlow.restoreSpeed);
     }
   },
 
@@ -741,7 +793,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  refreshPrimaryTrajectory: async (replacedAtBurnUnix) => {
+  refreshPrimaryTrajectory: async () => {
     const s = get();
     if (!s.scenario || !s.dataWindow) return;
     const scenarioId = s.scenario.scenario_id;
@@ -760,14 +812,55 @@ export const useAppStore = create<AppState>()((set, get) => ({
         cur = get();
         if (cur.scenario?.scenario_id !== scenarioId) return;
       }
-      const previous = cur.trajectories[primaryId];
-      set({
-        trajectories: { ...cur.trajectories, [primaryId]: fetched },
-        previousPrimaryTrajectory: replacedAtBurnUnix !== null && previous ? { trajectory: previous, replacedAtBurnUnix } : null,
-      });
+      set({ trajectories: { ...cur.trajectories, [primaryId]: fetched } });
     } catch (e) {
       set({ notice: `The spacecraft's new path could not be loaded: ${errMsg(e)}` });
     }
+  },
+
+  // ---------------------------------------------------------------- ghosts
+  syncGhosts: () => {
+    const s = get();
+    if (!s.scenario) return;
+    const next = ghostsFromCommitted(s.simulation?.committed_maneuvers, s.ghosts, detectionRadii(s.scenario.thresholds).criticalKm, s.objects);
+    if (next !== s.ghosts) {
+      const keep = s.insetTarget === 'primary' || next.some((g) => g.id === s.insetTarget);
+      set({ ghosts: next, insetTarget: keep ? s.insetTarget : 'primary' });
+    }
+    for (const g of next) {
+      if ((g.status === 'loading' && g.attempts === 0) || (g.status === 'failed' && g.attempts < GHOST_MAX_ATTEMPTS)) void get().fetchGhostTrajectory(g.id);
+    }
+  },
+
+  fetchGhostTrajectory: async (id) => {
+    const s = get();
+    const ghost = s.ghosts.find((g) => g.id === id);
+    if (!s.scenario || !ghost) return;
+    const scenarioId = s.scenario.scenario_id;
+    const resetCount = s.scenario.simulation.reset_count;
+    // a switch, a reset or a withdrawal while the request is in flight makes its answer stale
+    const patch = (fields: Partial<Ghost>): boolean => {
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId || cur.scenario.simulation.reset_count !== resetCount) return false;
+      if (!cur.ghosts.some((g) => g.id === id)) return false;
+      set({ ghosts: cur.ghosts.map((g) => (g.id === id ? { ...g, ...fields } : g)) });
+      return true;
+    };
+    patch({ status: 'loading', attempts: ghost.attempts + 1 });
+    const range = ghostFetchRange(ghost);
+    try {
+      const trajectory = await api.trajectory(scenarioId, s.scenario.primary_id, {
+        variant: 'before_burn', maneuver_id: id, start: isoOf(range.startUnix), end: isoOf(range.endUnix), step_s: stepFor(s.scenario.kind),
+      });
+      patch({ trajectory, status: 'ready', crashPointTeme: ghost.crashPointTeme ?? crashPointOf({ ...ghost, trajectory }) });
+    } catch (e) {
+      if (patch({ status: 'failed' })) set({ notice: `The ghost's course could not be loaded: ${errMsg(e)}` });
+    }
+  },
+
+  setInsetTarget: (target) => {
+    const s = get();
+    set({ insetTarget: target === 'primary' || s.ghosts.some((g) => g.id === target) ? target : 'primary' });
   },
 
   // ---------------------------------------------------------------- sandbox
@@ -815,12 +908,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         },
         ...(notices.length ? { notice: notices[0] } : {}),
       });
-      if (committed.length > before) {
-        const newest = committed.reduce((best, m) => (m.burn_time_unix > best ? m.burn_time_unix : best), -Infinity);
-        await get().refreshPrimaryTrajectory(Number.isFinite(newest) ? newest : null);
-      } else if (committed.length < before) {
-        await get().refreshPrimaryTrajectory(null);
-      }
+      get().syncGhosts();
+      if (committed.length !== before) await get().refreshPrimaryTrajectory();
       // autopilot off: the planned burn waits in the decision panel
       const waiting = res.actions.find((a) => a.outcome === 'AWAITING_APPROVAL' && a.maneuver_id);
       if (waiting && !get().plan?.candidates.some((c) => c.maneuver_id === waiting.maneuver_id)) {
@@ -920,10 +1009,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       const selectedGone = cur.selectedObjectId ? gone.has(cur.selectedObjectId) : false;
       const conjGone = cur.selectedConjunction() ? gone.has(cur.selectedConjunction()!.secondary_id) : false;
+      const ghosts = cur.ghosts.filter((g) => !gone.has(g.secondaryId));
       set({
         objects,
         trajectories,
         simulation: res.simulation,
+        ghosts: ghosts.length === cur.ghosts.length ? cur.ghosts : ghosts,
+        insetTarget: cur.insetTarget === 'primary' || ghosts.some((g) => g.id === cur.insetTarget) ? cur.insetTarget : 'primary',
         screening: cur.screening ? { ...cur.screening, conjunctions: cur.screening.conjunctions.filter((c) => !gone.has(c.secondary_id)) } : cur.screening,
         selectedObjectId: selectedGone ? null : cur.selectedObjectId,
         objectDetail: selectedGone ? null : cur.objectDetail,

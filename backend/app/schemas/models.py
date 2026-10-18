@@ -147,7 +147,7 @@ class TrajectoryResponse(BaseModel):
     maneuver_id: Optional[str] = None
     burn_time: Optional[str] = None
     burn_times_unix: List[float] = []
-    variant: str = Field(default="original", description="original | committed | candidate")
+    variant: str = Field(default="original", description="original | committed | candidate | before_burn")
 
 
 class TrajectoryBatchRequest(BaseModel):
