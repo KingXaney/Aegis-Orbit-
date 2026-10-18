@@ -12,7 +12,7 @@ import {
   expiredGhostIds,
   ghostCrashEvents,
   ghostFetchRange,
-  ghostWarning,
+  ghostPhase,
   ghostsFromCommitted,
   type Ghost,
 } from '../simulation/ghosts';
@@ -109,7 +109,7 @@ export interface AppState {
   ghosts: Ghost[];
   /** What the corner close-up follows: the real spacecraft, or a ghost by its burn id. */
   insetTarget: 'primary' | string;
-  /** The ghost the close-up switched to by itself when its collision warning began (once per ghost). */
+  /** The ghost the close-up last switched to by itself when it was born (once per ghost). */
   ghostAutoSwitched: string | null;
   /** A committed burn is firing on the main globe right now. */
   burnFiring: { maneuverId: string } | null;
@@ -719,17 +719,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     }
     // Ghosts: an open-ended clock forgets a ghost once its collision is over (a bounded one can scrub
-    // back to it); the close-up switches to a ghost when its warning begins, once, and comes back to
-    // the spacecraft whenever the ghost it follows is not flying at this time.
+    // back to it); the close-up switches to a ghost when it is born (once per ghost, at the burn, not
+    // as its collision nears) and comes back to the spacecraft whenever the ghost it follows is not
+    // flying at this time.
     const expired = expiredGhostIds(s.ghosts, now, st.openEnded);
     if (expired.length) {
       const gone = new Set(expired);
       set({ ghosts: s.ghosts.filter((g) => !gone.has(g.id)), insetTarget: gone.has(s.insetTarget) ? 'primary' : s.insetTarget });
     }
     let cur = get();
-    const warn = ghostWarning(cur.ghosts, now);
-    if (warn?.phase === 'warning' && cur.insetTarget === 'primary' && cur.ghostAutoSwitched !== warn.ghost.id) {
-      set({ insetTarget: warn.ghost.id, ghostAutoSwitched: warn.ghost.id });
+    const newborn = cur.ghosts
+      .filter((g) => ghostPhase(g, now) === 'alive')
+      .reduce<Ghost | null>((best, g) => (!best || g.bornUnix > best.bornUnix ? g : best), null);
+    if (newborn && newborn.id !== cur.ghostAutoSwitched) {
+      set({ insetTarget: newborn.id, ghostAutoSwitched: newborn.id });
     } else if (cur.insetTarget !== 'primary' && !aliveGhosts(cur.ghosts, now).some((g) => g.id === cur.insetTarget)) {
       set({ insetTarget: 'primary' });
     }

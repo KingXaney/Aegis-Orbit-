@@ -21,6 +21,8 @@ export default function ClockControls() {
   const setSlowForPasses = useAppStore((s) => s.setSlowForPasses);
   const dataStall = useAppStore((s) => s.dataStall);
   const autoSlow = useAppStore((s) => s.autoSlow);
+  const showPath = useAppStore((s) => s.layers.original);
+  const toggleLayer = useAppStore((s) => s.toggleLayer);
   const busy = useAppStore((s) => s.sandbox.evaluateInFlight || s.sandbox.spawnInFlight);
   const disabled = !scenario;
   const next = nextEvent(screening, committed, sim.currentUnix, ghostCrashEvents(ghosts, sim.currentUnix));
@@ -56,7 +58,17 @@ export default function ClockControls() {
           <span className="text-[11px] text-dim">nothing ahead · spawn some junk</span>
         )}
       </div>
-      <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[10px] text-muted" title="Drop to 1× around each closest approach so the pass is watchable in the Follow view">
+      <Button
+        size="sm"
+        variant={showPath ? 'primary' : 'secondary'}
+        onClick={() => toggleLayer('original')}
+        aria-pressed={showPath}
+        title={showPath ? "Hide the line the spacecraft flies along (and the ghosts' courses)" : "Show the line the spacecraft flies along (and the ghosts' courses)"}
+        className="ml-auto"
+      >
+        {showPath ? 'Path on' : 'Path off'}
+      </Button>
+      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-muted" title="Drop to 1× around each closest approach so the pass is watchable in the Follow view">
         <input type="checkbox" className="accent-[var(--color-primary)]" checked={slowForPasses} onChange={(e) => setSlowForPasses(e.target.checked)} />
         Slow down for passes
       </label>

@@ -159,7 +159,7 @@ function InsetFrame({ className, expandedClassName, children }: InsetProps) {
             ) : (
               <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted">{name ?? 'Satellite'}</span>
             )}
-            {tracked && <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-primary">Ghost {tracked.index} · no dodge · debris enlarged</span>}
+            {tracked && <span className="rounded bg-panel/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-primary">Ghost {tracked.index} · no dodge · ghost &amp; debris enlarged</span>}
             {alert.level === 'ghost' && (
               <span className="rounded bg-threat/90 px-1.5 py-0.5 text-[10px] font-semibold text-bg">
                 {alert.crashed ? `Collision · would have passed ${formatMiss(alert.missKm)}` : `Collision course · ${shortName(tracked?.secondaryName ?? 'debris')}`}

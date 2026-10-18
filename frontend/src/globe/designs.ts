@@ -23,10 +23,11 @@ export type Axis = 'x' | 'y' | 'z';
 
 export type PartColor =
   | 'module' | 'truss' | 'radiator' | 'issArray' | 'array' | 'mli' | 'antenna' | 'stage' | 'nozzle' | 'debris' | 'debrisDark'
-  | 'cell' | 'panelFrame' | 'mliSilver' | 'deck' | 'baffle' | 'lens' | 'hinge';
+  | 'cell' | 'panelFrame' | 'mliSilver' | 'deck' | 'baffle' | 'lens' | 'hinge' | 'char';
 
 export type Part =
-  | { kind: 'box'; center: Vec3; size: Vec3; color: PartColor }
+  /** `tilt`: rotations (radians) about x, then y, then z, applied about the centre. */
+  | { kind: 'box'; center: Vec3; size: Vec3; color: PartColor; tilt?: Vec3 }
   /** Cylinder or cone along `axis`; `radiusPos` is the radius at the +axis end. */
   | { kind: 'cylinder'; center: Vec3; axis: Axis; length: number; radiusPos: number; radiusNeg: number; color: PartColor };
 
@@ -49,9 +50,22 @@ export const PART_COLORS: Record<PartColor, string> = {
   baffle: '#16181d',
   lens: '#0a0f1e',
   hinge: '#6b7280',
+  char: '#3f3f46', // scorched break-up edges
 };
 
-const box = (center: Vec3, size: Vec3, color: PartColor): Part => ({ kind: 'box', center, size, color });
+const box = (center: Vec3, size: Vec3, color: PartColor, tilt?: Vec3): Part => (tilt ? { kind: 'box', center, size, color, tilt } : { kind: 'box', center, size, color });
+
+/** The rotation of a part's `tilt` (x, then y, then z) as a row-major 3x3 matrix. */
+export function tiltMatrix(tilt: Vec3): number[] {
+  const [cx, cy, cz] = tilt.map(Math.cos);
+  const [sx, sy, sz] = tilt.map(Math.sin);
+  // Rz * Ry * Rx
+  return [
+    cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+    sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+    -sy, cy * sx, cy * cx,
+  ];
+}
 const cyl = (center: Vec3, axis: Axis, length: number, radius: number, color: PartColor, radiusNeg = radius): Part => ({
   kind: 'cylinder', center, axis, length, radiusPos: radius, radiusNeg, color,
 });
@@ -190,13 +204,55 @@ function rocketBody(L: number, W: number, H: number): Part[] {
   ];
 }
 
-/** Irregular cluster of bent plates: a break-up fragment. */
+/**
+ * A break-up fragment: a torn, buckled structure panel with a bent-back flap, a scrap of solar cells
+ * and a shred of gold MLI still attached, a snapped strut, a scorched bracket and loose shards, every
+ * piece twisted a little so the outline is jagged from any side. Laid out in a unit envelope, then
+ * fitted to the design's.
+ */
 function debrisFragment(L: number, W: number, H: number): Part[] {
-  return [
-    box([-0.2 * L, -0.15 * W, -0.25 * H], [0.6 * L, 0.7 * W, 0.5 * H], 'debris'),
-    box([0.2 * L, 0.15 * W, 0.15 * H], [0.6 * L, 0.7 * W, 0.4 * H], 'debrisDark'),
-    box([0.1 * L, -0.3 * W, 0.3 * H], [0.3 * L, 0.2 * W, 0.4 * H], 'debris'),
+  const parts: Part[] = [
+    box([-0.12, -0.04, -0.06], [0.6, 0.62, 0.22], 'debris', [0.07, -0.05, 0.18]), // torn main panel
+    box([0.24, 0.12, 0.1], [0.42, 0.5, 0.18], 'debrisDark', [-0.09, -0.12, -0.34]), // flap bent back
+    box([-0.34, 0.24, 0.16], [0.22, 0.3, 0.1], 'cell', [0.12, 0.08, 0.5]), // scrap of solar cells
+    box([0.04, -0.3, 0.22], [0.3, 0.18, 0.06], 'mli', [0.14, 0.06, -0.6]), // gold MLI shred
+    cyl([0.3, -0.2, -0.22], 'x', 0.36, 0.1, 'hinge', 0.07), // snapped strut
+    box([-0.4, -0.28, -0.24], [0.12, 0.16, 0.26], 'char', [0.05, 0.04, 0.3]), // scorched bracket
+    box([0.43, 0.36, -0.14], [0.1, 0.12, 0.14], 'debris', [0.3, 0.25, 0.7]), // loose shard
+    box([-0.46, 0.02, 0.0], [0.08, 0.1, 0.12], 'debrisDark', [0.2, 0.15, -0.5]), // loose shard
   ];
+  return fitParts(parts, [L, W, H]);
+}
+
+/** A box's axis-aligned half-extents, rotation included. */
+function boxHalf(p: Extract<Part, { kind: 'box' }>): Vec3 {
+  const h: Vec3 = [p.size[0] / 2, p.size[1] / 2, p.size[2] / 2];
+  if (!p.tilt) return h;
+  const m = tiltMatrix(p.tilt);
+  return [0, 1, 2].map((r) => Math.abs(m[3 * r]) * h[0] + Math.abs(m[3 * r + 1]) * h[1] + Math.abs(m[3 * r + 2]) * h[2]) as Vec3;
+}
+
+/**
+ * Stretch a layout to fill `dims`, centred: a few per-axis passes (exact for unrotated parts, close for
+ * slightly tilted ones), then a uniform shrink, which is exact for any rotation, so nothing pokes out.
+ */
+function fitParts(parts: Part[], dims: Vec3): Part[] {
+  let out = parts;
+  const scaleBy = (k: Vec3, shift: Vec3) =>
+    out.map((p): Part => {
+      const center = p.center.map((c, i) => (c - shift[i]) * k[i]) as Vec3;
+      if (p.kind === 'box') return { ...p, center, size: p.size.map((v, i) => v * k[i]) as Vec3 };
+      const a = 'xyz'.indexOf(p.axis);
+      const r = Math.min(...[0, 1, 2].filter((i) => i !== a).map((i) => k[i]));
+      return { ...p, center, length: p.length * k[a], radiusPos: p.radiusPos * r, radiusNeg: p.radiusNeg * r };
+    });
+  for (let pass = 0; pass < 6; pass++) {
+    const [min, max] = partBounds(out);
+    out = scaleBy(dims.map((d, i) => d / (max[i] - min[i])) as Vec3, min.map((m, i) => (m + max[i]) / 2) as Vec3);
+  }
+  const [min, max] = partBounds(out);
+  const u = Math.min(...dims.map((d, i) => d / (max[i] - min[i])));
+  return scaleBy([u, u, u], min.map((m, i) => (m + max[i]) / 2) as Vec3);
 }
 
 const BUILDERS: Record<string, (L: number, W: number, H: number) => Part[]> = {
@@ -219,7 +275,7 @@ export function partBounds(parts: Part[]): [Vec3, Vec3] {
   const max: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const p of parts) {
     let half: Vec3;
-    if (p.kind === 'box') half = [p.size[0] / 2, p.size[1] / 2, p.size[2] / 2];
+    if (p.kind === 'box') half = boxHalf(p);
     else {
       const r = Math.max(p.radiusPos, p.radiusNeg);
       half = [r, r, r];

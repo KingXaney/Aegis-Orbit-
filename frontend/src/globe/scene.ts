@@ -99,35 +99,53 @@ const JUNK_MIN_PIXELS = 24;
 const JUNK_MAX_BOOST = 400;
 // A pass is over this long after its closest approach: its markers go and it stops colouring its object.
 const PASS_DONE_S = 90;
-// Close-up (inset) only. Junk on a collision course with what the close-up follows is drawn as a model
-// from much further out and much larger than other junk, with a red halo, a kind glyph while the model
-// is still too small, and a lead arrow toward the target; other junk keeps the main view's boost.
+// Junk on a collision course is drawn as a (tumbling) 3D model from much further out and much larger
+// than other junk, with a lead arrow toward its target in the close-up: in the close-up, junk heading
+// for what it follows; in both views, the debris a flying ghost is about to meet. Other junk keeps the
+// main view's boost. The camera is never moved for it: the user's view stays the user's.
 const INSET_JUNK_MIN_PIXELS = 40;
-const INSET_THREAT_BOOST_RANGE_M = 100_000;
-const INSET_THREAT_MIN_PIXELS = 64;
-const INSET_THREAT_MAX_BOOST = 2000;
+const THREAT_BOOST_RANGE_M = 100_000;
+const THREAT_MIN_PIXELS = 64;
+const THREAT_MAX_BOOST = 2000;
 /** An enlarged piece never grows past this fraction of its distance to the target, so it cannot swallow it. */
 const JUNK_MAX_GAP_FRACTION = 0.25;
-const THREAT_HALO_SCALE = 1.8;
-const THREAT_HALO_MIN_PIXELS = 28;
 const THREAT_LEAD_PIXELS = 40;
 const THREAT_LEAD_MAX_RANGE_M = 50_000;
 /**
- * Close-up: while collision-course junk is within this gap of what the close-up follows, the camera eases
- * to a spot behind and above the target looking toward the junk (keeping the user's zoom), so the
- * debris crosses the frame instead of passing behind the camera.
+ * The ghost's explosion, in simulated seconds after the collision (the clock runs at 1x through it,
+ * see GHOST_HOLD_S): a white-hot flash, an orange fireball, two shock rings, a burst of sparks and a
+ * glowing ember that fades out by the end of the hold. Pixel sizes are for a 700 px tall view.
  */
-const DIRECTOR_RANGE_M = 80_000;
-const DIRECTOR_SMOOTH = 0.15;
+const BLAST_FLASH_PX = 360;
+const BLAST_FLASH_DECAY_S = 0.7;
+const BLAST_FIREBALL_PX = 280;
+const BLAST_RING_PX = 620;
+const BLAST_RING_S = 2.6;
+const BLAST_RING_STAGGER_S = 0.45;
+const BLAST_SPARKS = 22;
+const BLAST_SPARK_PX = 300;
+const BLAST_SPARK_S = 4;
+const BLAST_EMBER_PX = 70;
 /**
- * How far the director camera sits off the target-to-debris line (fraction of the view range), below it in
- * the radial sense: looking slightly up at the target puts the incoming debris in the lower part of the
- * frame, against space and clear of the caption (about 17 degrees off the view axis).
+ * The debris a ghost meets is drawn bending onto the ghost over the last CONVERGE_S before the collision,
+ * so the two visibly hit (the true pass is a near miss of `missKm`, which the captions keep), and back
+ * onto its own path during the explosion. At several km/s the bend is a fraction of a degree.
  */
-const DIRECTOR_LIFT = -0.3;
-/** The ghost's impact flash: pixel size at the collision, shrinking to the end size over GHOST_HOLD_S. */
-const GHOST_FLASH_PX = 144;
-const GHOST_FLASH_END_PX = 32;
+const CONVERGE_S = 20;
+/**
+ * Following a ghost, the camera starts GHOST_VIEW_RANGE_M off it, looking across the line the debris
+ * will come in on (so the debris crosses the frame into the ghost instead of arriving from behind the
+ * camera); the ghost is drawn enlarged to GHOST_MIN_PIXELS so it reads from there. Set once, when the
+ * view switches to the ghost: the user's drag and zoom are never overridden.
+ */
+const GHOST_VIEW_RANGE_M = 2000;
+const GHOST_MIN_PIXELS = 48;
+const GHOST_MAX_BOOST = 400;
+const SEPARATE_S = GHOST_HOLD_S;
+const smoothstep = (x: number) => {
+  const t = Math.min(1, Math.max(0, x));
+  return t * t * (3 - 2 * t);
+};
 const DV_ARROW_LINGER_MS = 4000;
 const THREAT_ORDER: ThreatState[] = ['NORMAL', 'MONITORING', 'UNVERIFIED', 'ELEVATED', 'CRITICAL', 'MITIGATED'];
 
@@ -159,23 +177,12 @@ const SATELLITE_SVG = encodeURIComponent(
     </g></svg>`,
 );
 
-// Close-up glyphs for junk on a collision course while its model is still too small to see.
-const JUNK_GLYPHS: Record<string, string> = {
-  'debris-fragment': `<polygon points="6,20 14,4 24,10 34,6 30,20 36,30 22,36 10,32" fill="#fecaca" stroke="#f87171" stroke-width="2"/>`,
-  'rocket-body': `<rect x="8" y="14" width="22" height="12" rx="4" fill="#fecaca" stroke="#f87171" stroke-width="2"/><polygon points="30,14 38,10 38,30 30,26" fill="#f87171"/>`,
-  'box-wing-bus': `<rect x="15" y="14" width="10" height="12" fill="#fecaca" stroke="#f87171" stroke-width="2"/><rect x="2" y="17" width="11" height="6" fill="#fca5a5"/><rect x="27" y="17" width="11" height="6" fill="#fca5a5"/>`,
-};
-function junkGlyph(designId: string): string {
-  const body = JUNK_GLYPHS[designId] ?? JUNK_GLYPHS['debris-fragment'];
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">${body}</svg>`)}`;
-}
-
 function objectColor(o: ObjectSummary): Cesium.Color {
   if (o.category === 'DEBRIS') return COLORS.debris;
   return COLORS.tracked;
 }
 
-/** A soft radial glow drawn as a billboard: the burn flare (lime) at the burn point, the ghost's impact flash (red). */
+/** A soft radial glow drawn as a billboard: the burn flare (lime) at the burn point, the parts of the ghost's explosion. */
 function flareImage(core = '247, 254, 231', glow = '163, 230, 53'): HTMLCanvasElement {
   const size = 64;
   const canvas = document.createElement('canvas');
@@ -193,6 +200,29 @@ function flareImage(core = '247, 254, 231', glow = '163, 230, 53'): HTMLCanvasEl
   }
   return canvas;
 }
+
+/** A shock ring for the ghost's explosion: a bright band with soft edges, clear inside. */
+function ringImage(): HTMLCanvasElement {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    g.addColorStop(0, 'rgba(255, 237, 213, 0)');
+    g.addColorStop(0.62, 'rgba(253, 186, 116, 0)');
+    g.addColorStop(0.8, 'rgba(255, 247, 237, 1)');
+    g.addColorStop(0.9, 'rgba(251, 146, 60, 0.6)');
+    g.addColorStop(1, 'rgba(249, 115, 22, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+  }
+  return canvas;
+}
+
+/** Ease-out from 0 to 1 over `durationS`. */
+const easeOut = (t: number, durationS: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t / durationS)), 3);
 
 export class GlobeScene {
   readonly viewer: Cesium.Viewer;
@@ -229,9 +259,8 @@ export class GlobeScene {
   private criticalKm = 5;
   /** Close-up: this frame's facts about each piece of junk, for its threat cues. */
   private junkCues = new Map<string, JunkCue>();
-  /** Close-up: the camera is being aimed at incoming debris (see aimAtIncomingDebris). */
-  private directorActive = false;
-  private readonly directorOffset = new Cesium.Cartesian3();
+  /** Flying ghosts' Earth-fixed positions this frame, by the debris each is about to meet. */
+  private readonly ghostTargets = new Map<string, Cesium.Cartesian3>();
   /** Screened passes per secondary (state, closest-approach time, miss); past passes stop colouring an object. */
   private threats: { id: string; state: ThreatState; tcaUnix: number; missKm: number }[] = [];
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true };
@@ -264,6 +293,9 @@ export class GlobeScene {
   private lastFired: { id: string; endedMs: number } | null = null;
   private flare: HTMLCanvasElement | null = null;
   private flareRed: HTMLCanvasElement | null = null;
+  private flareHot: HTMLCanvasElement | null = null;
+  private flareFire: HTMLCanvasElement | null = null;
+  private ring: HTMLCanvasElement | null = null;
   private readonly focusFixed = new Cesium.Cartesian3();
   private readonly labelCache = new Map<string, string>();
 
@@ -397,9 +429,11 @@ export class GlobeScene {
     const primaryState = primaryTraj?.stateAt(unix) ?? null;
     this.primaryStateNow = primaryState;
     // ghosts first: the camera may be following one
+    this.ghostTargets.clear();
     for (const actor of this.ghosts.values()) {
       const phase = ghostPhase(actor.view, unix);
       actor.stateNow = phase === 'alive' || phase === 'crashing' ? actor.traj.stateAt(unix) : null;
+      if (actor.stateNow) this.ghostTargets.set(actor.view.secondaryId, temeToFixed(time, actor.stateNow.p));
     }
     this.syncTrackedEntity();
     const trackedGhost = this.trackTargetId !== 'primary' ? this.ghosts.get(this.trackTargetId) : undefined;
@@ -407,7 +441,7 @@ export class GlobeScene {
     const focusFixed = this.focusStateNow ? temeToFixed(time, this.focusStateNow.p, this.focusFixed) : null;
     this.closeView = !!focusFixed && Cesium.Cartesian3.distance(camera, focusFixed) < CLOSE_VIEW_M;
     for (const [id, model] of this.models) {
-      const st = this.trajectories.get(id)?.stateAt(unix);
+      const st = this.displayState(id, unix);
       if (!st) {
         model.hide();
         this.junkCues.delete(id);
@@ -416,18 +450,24 @@ export class GlobeScene {
       const pos = temeToFixed(time, st.p, this.scratchPos);
       let scale = 1;
       const obj = this.objects.get(id);
-      if (obj?.spawned_at_unix != null && id !== this.primaryId && focusFixed) {
-        // Spawned junk near what the view follows is drawn enlarged so it can be seen at all. In the
-        // close-up, junk on a collision course with the followed target is drawn from much further out.
-        const gap = Cesium.Cartesian3.distance(pos, focusFixed);
+      const ghostAt = this.ghostTargets.get(id);
+      if ((obj?.spawned_at_unix != null || ghostAt) && id !== this.primaryId && focusFixed) {
+        // Spawned junk near what the view follows is drawn enlarged so it can be seen at all. Junk on a
+        // collision course (with the close-up's target, or with a flying ghost) is drawn from much
+        // further out, never larger than a fraction of its gap so it cannot swallow what it meets.
+        const focusGap = Cesium.Cartesian3.distance(pos, focusFixed);
+        const ghostGap = ghostAt ? Cesium.Cartesian3.distance(pos, ghostAt) : Number.POSITIVE_INFINITY;
+        const gap = Math.min(focusGap, ghostGap);
         const camDist = Cesium.Cartesian3.distance(camera, pos);
-        const threat = this.inset && this.onCollisionCourse(id, unix);
-        if (gap < (threat ? INSET_THREAT_BOOST_RANGE_M : JUNK_BOOST_RANGE_M)) {
-          const minPixels = threat ? INSET_THREAT_MIN_PIXELS : this.inset ? INSET_JUNK_MIN_PIXELS : JUNK_MIN_PIXELS;
-          scale = model.boostFor(camDist, minPixels, threat ? INSET_THREAT_MAX_BOOST : JUNK_MAX_BOOST);
-          if (this.inset) scale = Math.max(1, Math.min(scale, (JUNK_MAX_GAP_FRACTION * gap) / model.envelopeRadiusM));
+        const insetThreat = this.inset && this.onCollisionCourse(id, unix);
+        const threat = !!ghostAt || insetThreat;
+        if (gap < (threat ? THREAT_BOOST_RANGE_M : JUNK_BOOST_RANGE_M)) {
+          const minPixels = threat ? THREAT_MIN_PIXELS : this.inset ? INSET_JUNK_MIN_PIXELS : JUNK_MIN_PIXELS;
+          scale = model.boostFor(camDist, minPixels, threat ? THREAT_MAX_BOOST : JUNK_MAX_BOOST);
+          // the debris a ghost meets may reach it: overlapping it is the collision
+          if (!ghostAt) scale = Math.max(1, Math.min(scale, (JUNK_MAX_GAP_FRACTION * gap) / model.envelopeRadiusM));
         }
-        if (this.inset) this.junkCues.set(id, { camDistM: camDist, gapM: gap, threat });
+        if (this.inset) this.junkCues.set(id, { camDistM: camDist, gapM: focusGap, threat: insetThreat });
       }
       model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), scale);
     }
@@ -439,9 +479,9 @@ export class GlobeScene {
         continue;
       }
       const pos = temeToFixed(time, st.p, this.scratchPos);
-      actor.model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), 1);
+      const scale = actor.model.boostFor(Cesium.Cartesian3.distance(camera, pos), GHOST_MIN_PIXELS, GHOST_MAX_BOOST);
+      actor.model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), scale);
     }
-    if (this.inset) this.aimAtIncomingDebris(unix);
     // the primary's thrusters: a plume while a committed burn fires, a faint glow just before
     const realNow = performance.now();
     this.plume = advancePlume(this.plume, { nowUnix: unix, speed: this.controller.speed, playing: this.controller.playing, realNowMs: realNow, burns: this.burnRefs });
@@ -462,9 +502,31 @@ export class GlobeScene {
     return time ? this.bridge.toUnix(time) : this.controller.currentUnix;
   }
 
+  /**
+   * Where an object is drawn (TEME km): its trajectory, plus, for the debris a ghost is about to meet,
+   * the bend that carries it into the ghost (see CONVERGE_S). Paths stay on the true trajectory.
+   */
+  private displayState(objectId: string, unix: number): { p: Vec3; v: Vec3 } | null {
+    const traj = this.trajectories.get(objectId);
+    const st = traj?.stateAt(unix);
+    if (!traj || !st) return null;
+    for (const actor of this.ghosts.values()) {
+      const view = actor.view;
+      if (view.secondaryId !== objectId) continue;
+      const dt = unix - view.crashUnix;
+      if (dt < -CONVERGE_S || dt > SEPARATE_S) continue;
+      const g = actor.traj.positionAt(view.crashUnix);
+      const d = traj.positionAt(view.crashUnix);
+      if (!g || !d) continue;
+      const w = dt <= 0 ? smoothstep(1 + dt / CONVERGE_S) : smoothstep(1 - dt / SEPARATE_S);
+      return { p: [st.p[0] + (g[0] - d[0]) * w, st.p[1] + (g[1] - d[1]) * w, st.p[2] + (g[2] - d[2]) * w], v: st.v };
+    }
+    return st;
+  }
+
   private positionProperty(objectId: string): Cesium.CallbackPositionProperty {
     return new Cesium.CallbackPositionProperty((time, result) => {
-      const p = this.trajectories.get(objectId)?.positionAt(this.unixOf(time));
+      const p = this.displayState(objectId, this.unixOf(time))?.p;
       // a NaN position would stop Cesium's render loop for good; no position is a skipped frame
       if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return undefined;
       return temeToFixed(time ?? this.bridge.toJulian(this.controller.currentUnix), p, result);
@@ -665,7 +727,7 @@ export class GlobeScene {
       this.addPrimaryPath();
     } else {
       this.addObjectPath(id, baseColor, isHighlight, spawnedAt);
-      if (spawnedAt !== null && this.inset) this.addThreatCues(obj, pos, present);
+      if (spawnedAt !== null && this.inset) this.addThreatCues(obj, present);
     }
   }
 
@@ -685,7 +747,10 @@ export class GlobeScene {
 
   private addModel(obj: ObjectSummary): void {
     if (this.models.has(obj.object_id) || !obj.design) return;
-    this.models.set(obj.object_id, new SpacecraftModel(this.viewer.scene, obj.design, { rcs: obj.object_id === this.primaryId }));
+    const isPrimary = obj.object_id === this.primaryId;
+    // debris and dead junk tumble; the spacecraft and tracked satellites hold their attitude
+    const tumble = !isPrimary && (obj.category === 'DEBRIS' || obj.spawned_at_unix != null);
+    this.models.set(obj.object_id, new SpacecraftModel(this.viewer.scene, obj.design, { rcs: isPrimary, tumble }));
   }
 
   private removeModel(objectId: string): void {
@@ -1074,7 +1139,8 @@ export class GlobeScene {
       const p = phase();
       return p === 'alive' || p === 'crashing';
     };
-    const modelShown = () => actor.model?.shown ?? false;
+    // the marker gives way to the model, and to the explosion once the ghost is hit
+    const modelShown = () => (actor.model?.shown ?? false) || phase() === 'crashing';
     const position = new Cesium.CallbackPositionProperty((time, result) => {
       const p = actor.traj.positionAt(this.unixOf(time));
       if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return undefined;
@@ -1139,26 +1205,74 @@ export class GlobeScene {
         }),
       );
     }
-    // the impact flash at the collision, in both views
-    const flashPx = () => {
-      const f = Math.min(1, Math.max(0, 1 - (now() - actor.view.crashUnix) / GHOST_HOLD_S));
-      return GHOST_FLASH_END_PX + (GHOST_FLASH_PX - GHOST_FLASH_END_PX) * f;
-    };
-    actor.extras.push(
-      this.viewer.entities.add({
-        id: `ghost:${id}#flash`,
-        position,
-        billboard: {
-          image: (this.flareRed ??= flareImage('255, 241, 242', '248, 113, 113')),
-          width: new Cesium.CallbackProperty(flashPx, false),
-          height: new Cesium.CallbackProperty(flashPx, false),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          show: new Cesium.CallbackProperty(() => phase() === 'crashing', false),
-        },
-      }),
-    );
+    actor.extras.push(...this.addGhostBlast(id, actor, position));
     this.ghosts.set(id, actor);
     return actor;
+  }
+
+  /**
+   * The ghost's explosion at the collision, in both views (see the BLAST_ constants): billboards drawn
+   * over everything, sized in pixels so it reads from the close-up and from the whole-Earth view alike.
+   */
+  private addGhostBlast(id: string, actor: GhostActor, position: Cesium.PositionProperty): Cesium.Entity[] {
+    const since = () => this.controller.currentUnix - actor.view.crashUnix;
+    const on = () => ghostPhase(actor.view, this.controller.currentUnix) === 'crashing';
+    // pixel sizes follow the view's height, so the close-up's blast fits the close-up
+    const px = (base: number) => base * Math.min(1.3, Math.max(0.4, this.viewer.scene.canvas.clientHeight / 700));
+    const fadeOut = (t: number, start: number, end: number) => 1 - Math.min(1, Math.max(0, (t - start) / (end - start)));
+    const sized = (size: () => number) => ({ width: new Cesium.CallbackProperty(size, false), height: new Cesium.CallbackProperty(size, false) });
+    const tinted = (base: Cesium.Color, alpha: () => number) => {
+      const scratch = new Cesium.Color();
+      return new Cesium.CallbackProperty(() => Cesium.Color.fromAlpha(base, Math.max(0, alpha()), scratch), false);
+    };
+    const billboard = (key: string, image: HTMLCanvasElement, size: () => number, alpha: () => number, extra: Partial<Cesium.BillboardGraphics.ConstructorOptions> = {}) =>
+      this.viewer.entities.add({
+        id: `ghost:${id}#blast-${key}`,
+        position,
+        billboard: {
+          image,
+          ...sized(size),
+          color: tinted(Cesium.Color.WHITE, alpha),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          show: new Cesium.CallbackProperty(on, false),
+          ...extra,
+        },
+      });
+    const hot = (this.flareHot ??= flareImage('255, 255, 255', '254, 240, 138'));
+    const fire = (this.flareFire ??= flareImage('255, 237, 213', '249, 115, 22'));
+    const red = (this.flareRed ??= flareImage('255, 241, 242', '248, 113, 113'));
+    const ring = (this.ring ??= ringImage());
+    const entities: Cesium.Entity[] = [
+      // lingering ember: a red glow where the ghost was, fading by the end of the hold
+      billboard('ember', red, () => px(BLAST_EMBER_PX * (0.6 + 0.4 * easeOut(since(), 1.5))), () => 0.9 * fadeOut(since(), 2, GHOST_HOLD_S)),
+      // fireball: swells over two seconds, then cools and fades
+      billboard('fire', fire, () => px(BLAST_FIREBALL_PX * (0.3 + 0.7 * easeOut(since(), 2))), () => fadeOut(since(), 1.2, 5.5)),
+    ];
+    // shock rings: racing outward and thinning
+    for (let k = 0; k < 2; k++) {
+      const t = () => since() - k * BLAST_RING_STAGGER_S;
+      entities.push(
+        billboard(`ring${k}`, ring, () => px(BLAST_RING_PX * (0.08 + 0.92 * easeOut(t(), BLAST_RING_S)) * (k ? 0.75 : 1)), () => (t() < 0 ? 0 : fadeOut(t(), 0.2, BLAST_RING_S))),
+      );
+    }
+    // sparks: hot fragments thrown outward in every direction (fixed per ghost, so scrubbing replays them)
+    for (let k = 0; k < BLAST_SPARKS; k++) {
+      const angle = (k / BLAST_SPARKS) * Cesium.Math.TWO_PI + 0.35 * Math.sin(k * 12.9898);
+      const reach = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(k * 78.233));
+      const life = BLAST_SPARK_S * (0.6 + 0.4 * (0.5 + 0.5 * Math.cos(k * 3.17)));
+      const dir = new Cesium.Cartesian2(Math.cos(angle), Math.sin(angle));
+      const offset = new Cesium.Cartesian2();
+      entities.push(
+        billboard(`spark${k}`, k % 3 ? fire : hot, () => px(k % 3 ? 16 : 20) * (1 - 0.5 * easeOut(since(), life)), () => fadeOut(since(), 0.3 * life, life), {
+          pixelOffset: new Cesium.CallbackProperty(() => Cesium.Cartesian2.multiplyByScalar(dir, px(BLAST_SPARK_PX) * reach * easeOut(since(), life), offset), false),
+        }),
+      );
+    }
+    // the white-hot flash on top: huge for a moment, gone within a couple of seconds
+    entities.push(
+      billboard('flash', hot, () => px(60 + BLAST_FLASH_PX * Math.exp(-Math.max(0, since()) / BLAST_FLASH_DECAY_S)), () => fadeOut(since(), 0.4, 2.5)),
+    );
+    return entities;
   }
 
   private removeGhost(id: string): void {
@@ -1182,6 +1296,45 @@ export class GlobeScene {
     this.syncTrackedEntity();
   }
 
+  /** The tracking offset for an entity: a ghost's looks across its debris's approach, anything else the default. */
+  private viewFromFor(entity: Cesium.Entity): Cesium.Cartesian3 {
+    for (const actor of this.ghosts.values()) if (actor.entity === entity) return this.ghostViewFrom(actor) ?? this.defaultViewFrom();
+    return this.defaultViewFrom();
+  }
+
+  /**
+   * GHOST_VIEW_RANGE_M off the ghost, perpendicular to the debris's velocity relative to the ghost at the
+   * collision, preferring behind and above. In the frame Cesium tracks in (x along the velocity, y the
+   * orbit normal, z radial), which turns with the orbit, so the framing holds until the collision.
+   */
+  private ghostViewFrom(actor: GhostActor): Cesium.Cartesian3 | null {
+    const t = actor.view.crashUnix;
+    const g = actor.traj.stateAt(t);
+    const d = this.trajectories.get(actor.view.secondaryId)?.stateAt(t);
+    if (!g || !d) return null;
+    const norm = (a: Vec3): Vec3 | null => {
+      const n = Math.hypot(a[0], a[1], a[2]);
+      return n > 1e-9 ? [a[0] / n, a[1] / n, a[2] / n] : null;
+    };
+    const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const z = norm(g.p);
+    const vhat = norm(g.v);
+    const y = z && vhat ? norm(cross(z, vhat)) : null;
+    const u = norm([d.v[0] - g.v[0], d.v[1] - g.v[1], d.v[2] - g.v[2]]);
+    if (!z || !y || !u) return null;
+    const x = cross(y, z);
+    const uLocal: Vec3 = [dot(u, x), dot(u, y), dot(u, z)];
+    for (const pref of [[-1, 0, 0.5], [0, 1, 0.4]] as Vec3[]) {
+      const k = dot(pref, uLocal);
+      const c = norm([pref[0] - k * uLocal[0], pref[1] - k * uLocal[1], pref[2] - k * uLocal[2]]);
+      if (c && Math.hypot(pref[0] - k * uLocal[0], pref[1] - k * uLocal[1], pref[2] - k * uLocal[2]) > 0.3) {
+        return new Cesium.Cartesian3(c[0] * GHOST_VIEW_RANGE_M, c[1] * GHOST_VIEW_RANGE_M, c[2] * GHOST_VIEW_RANGE_M);
+      }
+    }
+    return null;
+  }
+
   /** The entity Follow mode should track right now: the chosen ghost while it flies, else the spacecraft. */
   private trackedEntity(): Cesium.Entity | null {
     if (this.trackTargetId !== 'primary') {
@@ -1196,63 +1349,8 @@ export class GlobeScene {
     if (this.destroyed || this.cameraMode !== 'follow') return;
     const want = this.trackedEntity();
     if (!want || this.viewer.trackedEntity === want) return;
-    want.viewFrom = this.defaultViewFrom();
+    want.viewFrom = this.viewFromFor(want);
     this.viewer.trackedEntity = want;
-  }
-
-  /**
-   * Close-up: while a piece of junk on a collision course with the followed target is within
-   * DIRECTOR_RANGE_M, move the camera (smoothly) to look from behind and above the target toward the
-   * debris, at the user's current range. Cesium keeps a tracked camera in the entity's velocity frame
-   * (x along the velocity, y the orbit normal, z radial), so the offset is computed in that frame.
-   */
-  private aimAtIncomingDebris(unix: number): void {
-    const focus = this.focusStateNow;
-    const camera = this.viewer.camera;
-    if (!focus || !this.viewer.trackedEntity || this.cameraMode !== 'follow') {
-      this.directorActive = false;
-      return;
-    }
-    let bestId: string | null = null;
-    let bestGap = DIRECTOR_RANGE_M;
-    for (const [id, c] of this.junkCues) {
-      if (c.threat && c.gapM < bestGap) {
-        bestGap = c.gapM;
-        bestId = id;
-      }
-    }
-    const junk = bestId ? this.trajectories.get(bestId)?.stateAt(unix) : null;
-    if (!junk) {
-      this.directorActive = false;
-      return;
-    }
-    const norm = (a: Vec3): Vec3 | null => {
-      const n = Math.hypot(a[0], a[1], a[2]);
-      return n > 0 ? [a[0] / n, a[1] / n, a[2] / n] : null;
-    };
-    const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    const z = norm(focus.p);
-    const vhat = norm(focus.v);
-    const y = z && vhat ? norm(cross(z, vhat)) : null;
-    const u = norm([junk.p[0] - focus.p[0], junk.p[1] - focus.p[1], junk.p[2] - focus.p[2]]);
-    if (!z || !y || !u) return;
-    const x = cross(y, z);
-    const uLocal: Vec3 = [dot(u, x), dot(u, y), dot(u, z)];
-    // offset along the target's radial axis, made perpendicular to the line toward the debris (DIRECTOR_LIFT < 0: below it)
-    let lift: Vec3 = [-uLocal[0] * uLocal[2], -uLocal[1] * uLocal[2], 1 - uLocal[2] * uLocal[2]];
-    lift = norm(lift) ?? [0, 1, 0];
-    const range = Math.max(Cesium.Cartesian3.magnitude(camera.position), MIN_ZOOM_M * 2);
-    const dir = norm([-uLocal[0] + DIRECTOR_LIFT * lift[0], -uLocal[1] + DIRECTOR_LIFT * lift[1], -uLocal[2] + DIRECTOR_LIFT * lift[2]]);
-    if (!dir) return;
-    const desired = Cesium.Cartesian3.fromElements(dir[0] * range, dir[1] * range, dir[2] * range, this.directorOffset);
-    // the camera's position is its offset in the tracked frame: ease from where it is to where it should be
-    const next = this.directorActive ? Cesium.Cartesian3.lerp(camera.position, desired, DIRECTOR_SMOOTH, desired) : Cesium.Cartesian3.lerp(camera.position, desired, DIRECTOR_SMOOTH * 2, desired);
-    const n = Cesium.Cartesian3.magnitude(next);
-    if (!(n > 0) || !Number.isFinite(n)) return;
-    Cesium.Cartesian3.multiplyByScalar(next, range / n, next);
-    camera.lookAtTransform(camera.transform, next);
-    this.directorActive = true;
   }
 
   /** Close-up: is this piece of junk heading for what the close-up follows? */
@@ -1266,49 +1364,23 @@ export class GlobeScene {
     return false;
   }
 
-  /** Close-up cues for a piece of junk on a collision course: a red halo, a kind glyph while the model is too small, a lead arrow. */
-  private addThreatCues(obj: ObjectSummary, pos: Cesium.PositionProperty, present: () => boolean): void {
+  /**
+   * Close-up cue for a piece of junk on a collision course: a lead arrow toward its target. The junk
+   * itself is its 3D model (enlarged, tumbling), nothing is drawn over it.
+   */
+  private addThreatCues(obj: ObjectSummary, present: () => boolean): void {
     const id = obj.object_id;
     const cue = () => this.junkCues.get(id);
     const model = () => this.models.get(id);
     const active = () => present() && (cue()?.threat ?? false);
-    const haloPx = () => {
-      const c = cue();
-      const m = model();
-      if (!c || !m) return THREAT_HALO_MIN_PIXELS;
-      return Math.max(THREAT_HALO_MIN_PIXELS, THREAT_HALO_SCALE * m.pixelsAcross(c.camDistM, m.displayScale));
-    };
     const entities = [
-      this.viewer.entities.add({
-        id: `cue:${id}#halo`,
-        position: pos,
-        billboard: {
-          image: (this.flareRed ??= flareImage('255, 241, 242', '248, 113, 113')),
-          width: new Cesium.CallbackProperty(haloPx, false),
-          height: new Cesium.CallbackProperty(haloPx, false),
-          color: COLORS.threat.withAlpha(0.6),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          show: new Cesium.CallbackProperty(active, false),
-        },
-      }),
-      this.viewer.entities.add({
-        id: `cue:${id}#glyph`,
-        position: pos,
-        billboard: {
-          image: junkGlyph(obj.design.design_id),
-          width: 22,
-          height: 22,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          show: new Cesium.CallbackProperty(() => active() && !this.modelShown(id), false),
-        },
-      }),
       this.viewer.entities.add({
         id: `cue:${id}#lead`,
         polyline: {
           positions: new Cesium.CallbackProperty((time) => {
             const c = cue();
             const m = model();
-            const st = this.trajectories.get(id)?.stateAt(this.unixOf(time));
+            const st = this.displayState(id, this.unixOf(time));
             const focus = this.focusStateNow;
             if (!c || !m || !st || !focus || c.gapM <= 1 || c.gapM > THREAT_LEAD_MAX_RANGE_M) return [];
             const lengthKm = Math.min(THREAT_LEAD_PIXELS * m.metresPerPixelAt(c.camDistM), 0.8 * c.gapM) / 1000;
@@ -1366,7 +1438,7 @@ export class GlobeScene {
       const target = this.trackedEntity();
       if (target) {
         // re-tracking makes Cesium apply the offset again
-        target.viewFrom = this.defaultViewFrom();
+        target.viewFrom = this.viewFromFor(target);
         this.viewer.trackedEntity = target;
       }
       return;

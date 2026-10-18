@@ -101,21 +101,25 @@ describe('liveTick with ghosts', () => {
     relativeSpeedKms: 8.2, criticalRadiusKm: 5, crashPointTeme: [7000, 0, 0], trajectory: path, status: 'ready', attempts: 1,
   });
 
-  it('slows the clock before the collision, follows the ghost once, and keeps it on a bounded clock', () => {
+  it('follows the ghost once when it is born, slows the clock before the collision, and keeps it on a bounded clock', () => {
     useAppStore.setState({ ghosts: [ready()] });
+    tick(BURN - 10);
+    expect(useAppStore.getState().insetTarget).toBe('primary');
+    tick(BURN + 1);
+    expect(useAppStore.getState().insetTarget).toBe('m1');
+    expect(useAppStore.getState().ghostAutoSwitched).toBe('m1');
+    // the user moves the close-up back by hand: it is not switched again
+    useAppStore.getState().setInsetTarget('primary');
     tick(CRASH - 200);
     expect(controller.speed).toBe(60);
     expect(useAppStore.getState().insetTarget).toBe('primary');
     tick(CRASH - 30);
     expect(controller.speed).toBe(10);
     expect(useAppStore.getState().autoSlow).toMatchObject({ kind: 'ghost', eventId: 'ghost:m1', restoreSpeed: 60 });
-    expect(useAppStore.getState().insetTarget).toBe('m1');
-    expect(useAppStore.getState().ghostAutoSwitched).toBe('m1');
+    // nor when the collision nears
+    expect(useAppStore.getState().insetTarget).toBe('primary');
     tick(CRASH - 5, { speed: 10 });
     expect(controller.speed).toBe(1);
-    // the user moves the close-up back by hand: the warning does not switch it again
-    useAppStore.getState().setInsetTarget('primary');
-    tick(CRASH - 4, { speed: 1 });
     expect(useAppStore.getState().insetTarget).toBe('primary');
     tick(CRASH + GHOST_HOLD_S + 1, { speed: 1 });
     expect(useAppStore.getState().autoSlow).toBeNull();

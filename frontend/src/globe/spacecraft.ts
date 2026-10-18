@@ -1,7 +1,7 @@
 import * as Cesium from 'cesium';
 import type { SpacecraftDesign } from '../types/api';
 import type { Vec3 } from '../simulation/trajectory';
-import { MODEL_ASSETS, PART_COLORS, designParts, type Axis, type Part } from './designs';
+import { MODEL_ASSETS, PART_COLORS, designParts, tiltMatrix, type Axis, type Part } from './designs';
 import { NOZZLE_FACES, plumeSpec, rcsNozzles, type NozzleFace } from './thrusters';
 
 /** Smallest on-screen size (pixels across the envelope) at which the 3D model replaces the marker. */
@@ -12,6 +12,8 @@ const GHOST_TINT = Cesium.Color.fromCssColorString('#67e8f9');
 const GHOST_ALPHA = 0.45;
 const GHOST_MIX = 0.55;
 const PLUME_CORE_COLOR = Cesium.Color.fromCssColorString('#f7fee7');
+/** Tumbling debris: radians per real second (whatever the clock speed, so it reads as a slow tumble). */
+const TUMBLE_RATE = 0.45;
 
 const AXIS_ROTATION: Record<Axis, Cesium.Matrix3> = {
   z: Cesium.Matrix3.IDENTITY,
@@ -27,7 +29,7 @@ function partInstance(part: Part, tint?: Cesium.Color): Cesium.GeometryInstance 
   if (part.kind === 'box') {
     return new Cesium.GeometryInstance({
       geometry: Cesium.BoxGeometry.fromDimensions({ dimensions: new Cesium.Cartesian3(...part.size), vertexFormat }),
-      modelMatrix: Cesium.Matrix4.fromTranslation(center),
+      modelMatrix: part.tilt ? Cesium.Matrix4.fromRotationTranslation(Cesium.Matrix3.fromRowMajorArray(tiltMatrix(part.tilt)), center) : Cesium.Matrix4.fromTranslation(center),
       attributes: { color },
     });
   }
@@ -96,6 +98,8 @@ export interface SpacecraftModelOptions {
   rcs?: boolean;
   /** A translucent, cyan-tinted copy: the ghost that flies the course not taken. */
   ghost?: boolean;
+  /** Spin slowly about a skewed axis, as uncontrolled debris does. */
+  tumble?: boolean;
 }
 
 /**
@@ -124,6 +128,11 @@ export class SpacecraftModel {
   private readonly x = new Cesium.Cartesian3();
   private readonly y = new Cesium.Cartesian3();
   private readonly z = new Cesium.Cartesian3();
+  /** Tumbling: the spin axis (body frame), a phase so pieces do not turn in step, and scratch. */
+  private readonly tumbleAxis: Cesium.Cartesian3 | null;
+  private readonly tumblePhase: number;
+  private readonly tumbleQuat = new Cesium.Quaternion();
+  private readonly tumbleRotation = new Cesium.Matrix3();
   private rcs: Cesium.Primitive | null = null;
   private readonly plumes = new Map<NozzleFace, { outer: Cesium.Primitive; core: Cesium.Primitive }>();
   /** Whether the model was drawn this frame (the scene hides the marker while it is). */
@@ -136,6 +145,10 @@ export class SpacecraftModel {
     this.design = design;
     this.envelopeRadiusM = 0.5 * Math.hypot(design.length_m, design.width_m, design.height_m);
     this.ghost = !!options.ghost;
+    this.tumbleAxis = options.tumble
+      ? Cesium.Cartesian3.normalize(new Cesium.Cartesian3(0.4 + Math.random(), Math.random() - 0.5, 0.8 + Math.random()), new Cesium.Cartesian3())
+      : null;
+    this.tumblePhase = Math.random() * Cesium.Math.TWO_PI;
     const tint = this.ghost ? GHOST_TINT : undefined;
     this.primitive = scene.primitives.add(
       new Cesium.Primitive({
@@ -244,6 +257,11 @@ export class SpacecraftModel {
       [this.x.x, this.x.y, this.x.z, this.y.x, this.y.y, this.y.z, this.z.x, this.z.y, this.z.z],
       this.rotation,
     );
+    if (this.tumbleAxis) {
+      const angle = this.tumblePhase + (performance.now() / 1000) * TUMBLE_RATE;
+      Cesium.Matrix3.fromQuaternion(Cesium.Quaternion.fromAxisAngle(this.tumbleAxis, angle, this.tumbleQuat), this.tumbleRotation);
+      Cesium.Matrix3.multiply(this.rotation, this.tumbleRotation, this.rotation);
+    }
     Cesium.Matrix4.fromRotationTranslation(this.rotation, positionFixed, this.matrix);
     const scaled = displayScale === 1 ? this.matrix : Cesium.Matrix4.multiplyByUniformScale(this.matrix, displayScale, this.scaledMatrix);
     if (this.primitive) this.primitive.modelMatrix = Cesium.Matrix4.clone(scaled, this.primitive.modelMatrix);
