@@ -17,6 +17,7 @@ class HealthResponse(BaseModel):
     version: str
     agent_mode: str
     gemini_configured: bool
+    gemini_model: str
     network_allowed: bool
     scenarios: List[str]
     disclaimer: str

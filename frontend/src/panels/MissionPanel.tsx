@@ -146,6 +146,7 @@ function AgentSection() {
   const runAgent = useAppStore((s) => s.runAgent);
   const scenario = useAppStore((s) => s.scenario);
   const health = useAppStore((s) => s.health);
+  const agentMode = useAppStore((s) => s.agentMode);
   return (
     <Section
       title="AI agent"
@@ -159,7 +160,11 @@ function AgentSection() {
       {!run && !loading && !error && (
         <Empty>
           The agent screens, plans, checks secondary risks and explains a recommendation. Every number it reports comes from a backend tool result.
-          {health && !health.gemini_configured && <div className="mt-1 text-dim">No GEMINI_API_KEY configured: the deterministic fallback runs the same tool workflow with a templated explanation.</div>}
+          {agentMode === 'deterministic' ? (
+            <div className="mt-1 text-dim">Deterministic agent selected in Settings: the same tool workflow with a templated explanation.</div>
+          ) : (
+            health && !health.gemini_configured && <div className="mt-1 text-dim">No GEMINI_API_KEY configured: the deterministic fallback runs the same tool workflow with a templated explanation.</div>
+          )}
         </Empty>
       )}
       {loading && <div className="text-[11px] text-muted">Screening → details → planning → secondary checks → report. This takes a few seconds.</div>}

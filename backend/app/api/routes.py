@@ -56,7 +56,8 @@ def _call(fn, *args, **kwargs):
 def health():
     s = get_settings()
     return HealthResponse(status="ok", version=__version__, agent_mode=s.agent_mode,
-                          gemini_configured=bool(s.gemini_api_key), network_allowed=s.allow_network,
+                          gemini_configured=bool(s.gemini_api_key), gemini_model=s.gemini_model,
+                          network_allowed=s.allow_network,
                           scenarios=[x["scenario_id"] for x in list_scenarios()], disclaimer=DISCLAIMER)
 
 
