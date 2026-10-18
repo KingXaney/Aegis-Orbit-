@@ -255,15 +255,24 @@ export default function ExplorerPage() {
         <SiteHeader />
         <h1 className="x-display mt-8 text-x-28 lg:mt-10 2xl:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
         <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
-        <a href="/mission" className="x-button x-button-primary mt-6 w-full sm:w-auto">
-          Simulate Collision
-        </a>
-        <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
-        <p className="mt-3 text-x-14">
-          <a href="/mission?scenario=sandbox" className="x-link">
-            Or open the live sandbox: drop space junk into orbit and watch the autopilot dodge it.
-          </a>
-        </p>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-2">
+            <a href="/mission" aria-describedby="cta-mission" className="x-button x-button-primary w-full">
+              Simulate Collision
+            </a>
+            <p id="cta-mission" className="text-x-12 text-x-muted">
+              A scripted encounter with a GPM stand-in.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <a href="/mission?scenario=sandbox" aria-describedby="cta-sandbox" className="x-button w-full">
+              Open Live Sandbox
+            </a>
+            <p id="cta-sandbox" className="text-x-12 text-x-muted">
+              Drop space junk into orbit and watch the autopilot dodge it.
+            </p>
+          </div>
+        </div>
       </header>
 
       <section inert={panelOpen} id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">
