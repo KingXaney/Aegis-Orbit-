@@ -3,6 +3,7 @@ import GlobeView from './globe/GlobeView';
 import LayerControls from './panels/LayerControls';
 import MissionPanel from './panels/MissionPanel';
 import ObjectInspector from './panels/ObjectInspector';
+import SatelliteInset from './panels/SatelliteInset';
 import TimelineBar from './panels/TimelineBar';
 import TopBar from './panels/TopBar';
 import { controller } from './simulation/controller';
@@ -52,6 +53,10 @@ export default function App() {
         <div className="absolute inset-0">
           <GlobeView />
         </div>
+        {/* before the HUD, so the object inspector stays on top if the two meet */}
+        <SatelliteInset className="pointer-events-none absolute bottom-[92px] right-3 h-[200px] w-[280px]">
+          <GlobeView variant="inset" />
+        </SatelliteInset>
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <TopBar />

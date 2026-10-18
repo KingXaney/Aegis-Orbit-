@@ -5,9 +5,12 @@ import { GlobeScene } from './scene';
 
 /**
  * Hosts the Cesium viewer. The scene manager (plain TypeScript) owns every
- * entity; React effects push store changes into it.
+ * entity; React effects push store changes into it. The 'inset' variant is the
+ * satellite close-up in the corner: it always follows the spacecraft, shows no
+ * labels, ignores the pointer and leaves the scene-ready state to the main view.
  */
-export default function GlobeView() {
+export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'inset' }) {
+  const inset = variant === 'inset';
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<GlobeScene | null>(null);
   const scenario = useAppStore((s) => s.scenario);
@@ -32,18 +35,24 @@ export default function GlobeView() {
         controller,
         {
           onPick: (kind, id) => {
+            if (inset) return;
             if (kind === 'object' && id) selectObject(id);
             else if (kind === 'candidate' && id) selectManeuver(id);
           },
         },
         import.meta.env.VITE_CESIUM_ION_TOKEN || undefined,
+        { inset },
       );
       sceneRef.current = scene;
+      if (inset) return () => {
+        scene.destroy();
+        sceneRef.current = null;
+      };
       if (import.meta.env.DEV) (window as unknown as { __globe?: GlobeScene }).__globe = scene;
       setSceneReady(true);
     } catch (err) {
       console.error('Cesium failed to initialise', err);
-      setSceneReady(false, (err as Error).message);
+      if (!inset) setSceneReady(false, (err as Error).message);
     }
     return () => {
       sceneRef.current?.destroy();
@@ -73,12 +82,12 @@ export default function GlobeView() {
   }, [plan, candidateTrajectories, selectedManeuverId, approvedManeuverId]);
 
   useEffect(() => {
-    sceneRef.current?.setLayers(layers);
+    sceneRef.current?.setLayers(inset ? { ...layers, labels: false } : layers);
   }, [layers]);
 
   useEffect(() => {
-    if (cameraResetNonce > 0) sceneRef.current?.resetCamera();
+    if (!inset && cameraResetNonce > 0) sceneRef.current?.resetCamera();
   }, [cameraResetNonce]);
 
-  return <div ref={containerRef} className="absolute inset-0" aria-label="3D orbital simulation" />;
+  return <div ref={containerRef} className="absolute inset-0" aria-label={inset ? 'Close-up of the satellite' : '3D orbital simulation'} />;
 }

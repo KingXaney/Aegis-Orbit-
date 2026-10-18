@@ -6,6 +6,7 @@ import type { SimulationController } from '../simulation/controller';
 import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, Trajectory } from '../types/api';
 import { TimeBridge, temeToFixed, temeVelocityToFixed } from './frames';
 import { SpacecraftModel } from './spacecraft';
+import { addDetectionRadius } from './detectionRadius';
 
 export interface LayerFlags {
   original: boolean;
@@ -14,11 +15,17 @@ export interface LayerFlags {
   background: boolean;
   backgroundOrbits: boolean;
   markers: boolean;
+  detection: boolean;
   labels: boolean;
 }
 
 export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
+}
+
+export interface SceneOptions {
+  /** A small picture-in-picture view: fewer pixels and frames, a coarser Earth, no camera input. */
+  inset?: boolean;
 }
 
 // Path colours: a glowing teal band for the path the spacecraft will fly, dashed cyan for the original
@@ -79,7 +86,7 @@ export class GlobeScene {
   private candidateTrajectories = new Map<string, SampledTrajectory>();
   private candidates: Maneuver[] = [];
   private approvedCandidateId: string | null = null;
-  private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true };
+  private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true };
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
@@ -91,7 +98,7 @@ export class GlobeScene {
   private scratchVel = new Cesium.Cartesian3();
   private earthTextureUrl: string | null = null;
 
-  constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string) {
+  constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string, options: SceneOptions = {}) {
     this.controller = controller;
     this.callbacks = callbacks;
     if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
@@ -134,6 +141,11 @@ export class GlobeScene {
     scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_M;
     scene.screenSpaceCameraController.maximumZoomDistance = 80_000_000;
     scene.fog.enabled = false;
+    if (options.inset) {
+      this.viewer.resolutionScale = 0.75;
+      this.viewer.targetFrameRate = 30;
+      scene.screenSpaceCameraController.enableInputs = false;
+    }
     this.viewer.clock.shouldAnimate = false;
     this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
 
@@ -181,7 +193,7 @@ export class GlobeScene {
     if (!ionToken) {
       // 8192 px only where the extra detail can show: high-density screens wider than a phone.
       const sharp = Math.max(container.clientWidth, window.innerWidth) >= 768 && (window.devicePixelRatio || 1) > 1;
-      void this.addEarth(sharp ? 8192 : 4096, palette);
+      void this.addEarth(options.inset ? 2048 : sharp ? 8192 : 4096, palette);
     }
   }
 
@@ -307,6 +319,7 @@ export class GlobeScene {
         entity.viewFrom = this.defaultViewFrom();
         this.primaryEntity = entity;
         this.addPrimaryIcon(pos);
+        addDetectionRadius(this.viewer.entities, { primary: entity, thresholds: detail.thresholds, objects: () => this.objectEntities.values(), show: () => this.layers.detection, showLabels: () => this.layers.labels });
         this.addPrimaryPath(traj);
       } else {
         this.addObjectPath(t.object_id, traj, color, isHighlight);

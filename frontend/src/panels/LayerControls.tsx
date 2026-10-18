@@ -23,6 +23,7 @@ export default function LayerControls() {
         <Toggle label="Threat object path" checked={layers.secondary} onChange={() => toggleLayer('secondary')} swatch="#f87171" />
         <Toggle label="Candidate maneuvers" checked={layers.candidates} onChange={() => toggleLayer('candidates')} swatch="#4ade80" />
         <Toggle label="TCA markers & danger region" checked={layers.markers} onChange={() => toggleLayer('markers')} swatch="#ef4444" />
+        <Toggle label="Detection radius (25 / 5 km)" checked={layers.detection} onChange={() => toggleLayer('detection')} swatch="#67e8f9" />
         <Toggle label="Tracked objects" checked={layers.background} onChange={() => toggleLayer('background')} swatch="#93c5fd" />
         <Toggle label="Tracked object orbits" checked={layers.backgroundOrbits} onChange={() => toggleLayer('backgroundOrbits')} />
         <Toggle label="Labels" checked={layers.labels} onChange={() => toggleLayer('labels')} />

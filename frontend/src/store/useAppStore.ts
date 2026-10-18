@@ -152,7 +152,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   simulation: null,
   decisionLoading: false,
   decisionError: null,
-  layers: { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, labels: true },
+  layers: { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true },
   cameraResetNonce: 0,
   notice: null,
   missionPanelOpen: readMissionPanelOpen(),
