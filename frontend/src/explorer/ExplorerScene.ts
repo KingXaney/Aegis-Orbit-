@@ -109,7 +109,7 @@ export class ExplorerScene {
   private readonly labelOptions: Cesium.Label.ConstructorOptions;
   private readonly ringImage = ringSprite();
   private readonly criticalRingImage = ringSprite([15, 21]);
-  private detections: { index: number; ring: Cesium.Billboard; label: Cesium.Label | null }[] = [];
+  private detections: { index: number; critical: boolean; ring: Cesium.Billboard; label: Cesium.Label | null }[] = [];
   private detected = new Set<number>();
   private dimUndetected = false;
   private readonly labels: Cesium.LabelCollection;
@@ -144,6 +144,7 @@ export class ExplorerScene {
   private readonly rotation = new Cesium.Matrix4();
   private readonly scratchM3 = new Cesium.Matrix3();
   private readonly scratchPos = new Cesium.Cartesian3();
+  private readonly scratchWorld = new Cesium.Cartesian3();
   private readonly scratchColor = new Cesium.Color();
   private readonly onInteract = () => {
     this.lastInteraction = performance.now() / 1000;
@@ -442,12 +443,13 @@ export class ExplorerScene {
         color: critical ? this.warning : this.baseColor(index).withAlpha(0.7),
         width: critical ? CRITICAL_RING_PX : DETECTED_RING_PX,
         height: critical ? CRITICAL_RING_PX : DETECTED_RING_PX,
-        // Critical rings stay visible behind the Earth's limb; the rest are hidden by it.
+        // Critical rings draw over the Earth's limb and are hidden once over the far side (see frame());
+        // the rest are hidden by the Earth's depth.
         disableDepthTestDistance: critical ? Number.POSITIVE_INFINITY : undefined,
         show: false,
       });
       const tag = critical ? this.labels.add({ ...this.labelOptions, text: label, fillColor: this.warning, pixelOffset: new Cesium.Cartesian2(18, 0), show: true }) : null;
-      this.detections.push({ index, ring, label: tag });
+      this.detections.push({ index, critical, ring, label: tag });
     }
     for (const { tcaTemeKm, critical } of d.encounters) {
       this.encounters.add({
@@ -556,8 +558,15 @@ export class ExplorerScene {
     }
     if (this.selected !== null && this.temePosition(this.selected, dt, pos)) this.ring.position = pos;
     if (approachIndex !== null && this.temePosition(approachIndex, dt, pos)) this.approachRing.position = pos;
-    for (const { index, ring, label } of this.detections) {
-      const visible = this.mask[index] === 1 && this.temePosition(index, dt, pos) !== null;
+    const camera = this.viewer.camera.positionWC;
+    for (const { index, critical, ring, label } of this.detections) {
+      let visible = this.mask[index] === 1 && this.temePosition(index, dt, pos) !== null;
+      // A critical ring and tag show only while the ground beneath the object faces the camera, so
+      // they go as the object reaches the limb rather than lingering over the far side.
+      if (visible && critical) {
+        const world = Cesium.Matrix4.multiplyByPoint(this.rotation, pos, this.scratchWorld);
+        visible = Cesium.Cartesian3.dot(world, camera) > EARTH_RADIUS_M * Cesium.Cartesian3.magnitude(world);
+      }
       if (ring.show !== visible) ring.show = visible;
       if (label && label.show !== visible) label.show = visible;
       if (!visible) continue;
