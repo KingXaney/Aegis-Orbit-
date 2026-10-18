@@ -35,11 +35,13 @@ def test_physics_only_tiers_on_synthetic(session, null_model):
     res = perc.perceive(session, model=null_model)
     crit = [o for o in res["objects"] if o["tier"] == "CRITICAL"]
     semi = [o for o in res["objects"] if o["tier"] == "SEMI_CRITICAL"]
-    assert len(crit) == 1 and crit[0]["object_id"] == synthetic.SECONDARY_ID
-    assert abs(crit[0]["physics"]["miss_distance_km"] - 0.3535) < 2e-3 and crit[0]["physics"]["verified"]
-    # the semi-critical entries are the same debris object on its later, farther passes (one per encounter)
-    assert semi and all(o["object_id"] == synthetic.SECONDARY_ID for o in semi)
-    assert len(semi) == res["counts"]["encounters"] - 1
+    assert sorted(o["object_id"] for o in crit) == sorted(synthetic.CRITICAL_STAGED_IDS)
+    deb = next(o for o in crit if o["object_id"] == synthetic.SECONDARY_ID)
+    assert abs(deb["physics"]["miss_distance_km"] - 0.3535) < 2e-3 and deb["physics"]["verified"]
+    # the semi-critical entries are the staged objects on their other, farther passes (one per encounter)
+    staged = {p.object_id for p in synthetic.STAGED_PASSES}
+    assert semi and all(o["object_id"] in staged for o in semi)
+    assert len(semi) == res["counts"]["encounters"] - len(crit)
     assert res["counts"]["ML_WATCH"] == 0 and res["counts"]["HIDDEN"] == 5 and res["model"]["status"] == "UNAVAILABLE"
     assert res["screening_mode"] == "FULL_PHYSICS" and res["complete"] and res["primary_variant"]["kind"] == "ORIGINAL"
     assert res["horizon"]["horizon_s"] >= 2 * (session.scenario.catalog.require(synthetic.PRIMARY_ID).period_s or 0)

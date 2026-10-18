@@ -8,7 +8,9 @@ def test_best_candidate_passes_secondary_screening(synthetic_catalog, synthetic_
     res = check_secondary(best, primary, synthetic_catalog.others(synthetic.PRIMARY_ID), synthetic_window["end_unix"],
                           synthetic_screening.conjunctions)
     assert res["validation_status"] == "PASS" and res["complete"]
-    assert res["new_conjunctions"] == []
+    # the burn may nudge a repeat pass of another staged object inside the screening radius, never more
+    staged = {p.object_id for p in synthetic.STAGED_PASSES}
+    assert all(c["secondary_id"] in staged and c["threat_state"] in ("NORMAL", "MONITORING") for c in res["new_conjunctions"])
     original = next(x for x in res["changed_conjunctions"] if x["conjunction_id"] == best.conjunction_id)
     assert original["after_miss_km"] > original["before_miss_km"]
     assert abs(original["after_miss_km"] - best.post_miss_distance_km) < 0.05

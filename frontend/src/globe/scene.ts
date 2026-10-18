@@ -564,7 +564,7 @@ export class GlobeScene {
       entity.viewFrom = this.defaultViewFrom();
       this.primaryEntity = entity;
       this.addPrimaryIcon(pos);
-      addDetectionRadius(this.viewer.entities, { primary: entity, thresholds: detail.thresholds, objects: () => this.objectEntities.values(), show: () => this.layers.detection, showLabels: () => this.layers.labels });
+      addDetectionRadius(this.viewer.entities, { primary: entity, thresholds: detail.thresholds, objects: () => this.objectEntities.values(), show: () => this.layers.detection, showLabels: () => this.layers.labels, bubbleRadiusM: this.inset ? 1.5 * (this.models.get(id)?.envelopeRadiusM ?? 8) : undefined });
       this.addPrimaryPath();
     } else {
       this.addObjectPath(id, baseColor, isHighlight, spawnedAt);

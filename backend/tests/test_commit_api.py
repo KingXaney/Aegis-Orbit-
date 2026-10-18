@@ -30,8 +30,8 @@ def test_approve_commits_the_burn_into_the_default_trajectory(client):
 
     appr = client.post("/api/simulation/approve", json={"scenario_id": SID, "maneuver_id": mid}).json()
     sim = appr["simulation"]
-    # the only staged pass is dodged, so the overall state is mitigated
-    assert sim["overall_threat_state"] == "MITIGATED" and sim["approved_maneuver_id"] == mid
+    # the later staged passes are still ahead, so the overall state stays critical
+    assert sim["overall_threat_state"] == "CRITICAL" and sim["approved_maneuver_id"] == mid
     assert [m["maneuver_id"] for m in sim["committed_maneuvers"]] == [mid]
     assert sim["committed_maneuvers"][0]["source"] == "human"
     assert sim["burn_times_unix"] == [cand["burn_time_unix"]] and sim["primary_version"] == 1
@@ -59,13 +59,13 @@ def test_approve_commits_the_burn_into_the_default_trajectory(client):
     assert [b["maneuver_id"] for b in primary["burns"]] == [mid]
 
     # the screening now sees the committed path: the mitigated pass is no longer critical (the debris's
-    # other repeat passes may move too) and nothing else is
+    # other repeat passes may move too); only the later staged passes remain critical
     cur = client.get("/api/conjunctions", params={"scenario_id": SID}).json()
     mitigated = [c for c in cur["conjunctions"] if c["secondary_id"] == synthetic.SECONDARY_ID
                  and abs(c["tca_unix"] - cand["post_tca_unix"]) < 600.0]
     assert mitigated and abs(mitigated[0]["miss_distance_km"] - cand["post_miss_distance_km"]) < 0.1
-    assert not any(c["threat_state"] == "CRITICAL" for c in cur["conjunctions"])
-    assert all(c["threat_state"] in ("MONITORING", "NORMAL") for c in cur["conjunctions"])
+    assert {c["secondary_id"] for c in cur["conjunctions"] if c["threat_state"] == "CRITICAL"} == set(synthetic.CRITICAL_STAGED_IDS[1:])
+    assert all(c["threat_state"] in ("MONITORING", "NORMAL") for c in cur["conjunctions"] if c["secondary_id"] not in synthetic.CRITICAL_STAGED_IDS[1:])
 
     # approving the same burn twice, or a second burn earlier than the committed one, is refused
     assert client.post("/api/simulation/approve", json={"scenario_id": SID, "maneuver_id": mid}).status_code == 409

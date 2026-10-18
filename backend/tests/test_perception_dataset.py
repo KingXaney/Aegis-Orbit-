@@ -17,8 +17,10 @@ def test_labeller_reproduces_the_designed_conjunction(synthetic_catalog, synthet
     assert abs(lab.d_min_km[k] - designed) < 2e-3
     assert abs(lab.tca_unix[k] - (synthetic.T0_UNIX + synthetic.TCA_OFFSET_S)) < 1.0
     assert 7.0 < lab.rel_speed_kms[k] < 8.5 and lab.n_minima[k] >= 1
+    # only the staged passes come within the screening radius
+    staged = {p.object_id for p in synthetic.STAGED_PASSES}
     for i, o in enumerate(others):
-        if o.object_id != synthetic.SECONDARY_ID:
+        if o.object_id not in staged:
             assert lab.d_min_km[i] > 25.0
 
 

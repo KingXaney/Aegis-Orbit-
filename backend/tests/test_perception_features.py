@@ -63,7 +63,7 @@ def test_eccentric_orbit_node_radii():
 def test_synthetic_crossing_angle_and_shapes(synthetic_catalog):
     primary = synthetic_catalog.require(synthetic.PRIMARY_ID)
     fm = pair_features(primary, synthetic_catalog.others(synthetic.PRIMARY_ID), synthetic.T0_UNIX)
-    assert fm.X.shape == (6, len(FEATURE_NAMES)) and fm.ok_mask.all()
+    assert fm.X.shape == (len(synthetic.STAGED_PASSES) + 5, len(FEATURE_NAMES)) and fm.ok_mask.all()
     k = fm.object_ids.index(synthetic.SECONDARY_ID)
     assert abs(fm.X[k, IDX["plane_angle_deg"]] - synthetic.CROSSING_ANGLE_DEG) < 2.0
     assert fm.X[k, IDX["dr_node_min_abs_km"]] < 15.0  # the crossing debris passes through the primary's altitude

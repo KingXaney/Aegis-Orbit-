@@ -15,7 +15,8 @@ def test_health_and_scenarios(client):
 
 def test_objects_and_trajectory(client):
     objs = client.get("/api/objects", params={"scenario_id": SID}).json()["objects"]
-    assert len(objs) == 7 and all(o["position_basis"] == "SYNTHETIC_STATE" for o in objs)
+    # the primary, the staged passes and five background objects
+    assert len(objs) == 1 + len(synthetic.STAGED_PASSES) + 5 and all(o["position_basis"] == "SYNTHETIC_STATE" for o in objs)
     d = client.get(f"/api/objects/{synthetic.PRIMARY_ID}", params={"scenario_id": SID}).json()
     assert d["state"]["status"] == "OK" and 400 < d["state"]["geocentric_altitude_km"] < 440
     assert "lat_deg" in d["state"]["geodetic"]
@@ -54,7 +55,8 @@ def test_full_workflow_with_approval(client):
     appr = client.post("/api/simulation/approve", json={"scenario_id": SID, "maneuver_id": rec})
     assert appr.status_code == 200
     sim = appr.json()["simulation"]
-    assert sim["overall_threat_state"] == "MITIGATED" and sim["approved_maneuver_id"] == rec
+    # DEB-4410 and R/B-3307 are still ahead (tests/test_scenario_b.py dodges all three)
+    assert sim["overall_threat_state"] == "CRITICAL" and sim["approved_maneuver_id"] == rec
     assert "No command is sent" in appr.json()["decision"]["note"]
 
     traj = client.get(f"/api/objects/{synthetic.PRIMARY_ID}/trajectory",
@@ -98,8 +100,8 @@ def test_perception_endpoints(client):
     r = client.get("/api/perception", params={"scenario_id": SID})
     assert r.status_code == 200
     d = r.json()
-    assert d["objects"][0]["tier"] == "CRITICAL" and d["objects"][0]["object_id"] == synthetic.SECONDARY_ID
-    assert d["counts"]["CRITICAL"] == 1 and d["screening_mode"] == "FULL_PHYSICS" and d["tier_rules"]
+    assert d["objects"][0]["tier"] == "CRITICAL" and d["objects"][0]["object_id"] in synthetic.CRITICAL_STAGED_IDS
+    assert d["counts"]["CRITICAL"] == len(synthetic.CRITICAL_STAGED_IDS) and d["screening_mode"] == "FULL_PHYSICS" and d["tier_rules"]
     assert d["model"]["status"] in ("LOADED", "UNAVAILABLE") and d["disclaimer"]
     assert client.get("/api/perception", params={"scenario_id": SID, "maneuver_id": "MV-nope"}).status_code == 404
     assert client.get("/api/perception", params={"scenario_id": SID, "critical_radius_km": 30, "tracked_radius_km": 25}).status_code == 400

@@ -54,6 +54,11 @@ export interface DetectionRadiusOptions {
   objects: () => Iterable<Cesium.Entity>;
   show: () => boolean;
   showLabels: () => boolean;
+  /**
+   * Close-up views: draw a bubble of this radius (metres) around the spacecraft instead of the
+   * true-scale shells, which would surround the camera there. It shows the same state.
+   */
+  bubbleRadiusM?: number;
 }
 
 /** Adds both shells and their labels to `entities`; removing the collection's entities removes them. */
@@ -75,6 +80,21 @@ export function addDetectionRadius(entities: Cesium.EntityCollection, opts: Dete
   const color = (pick: (s: Intrusion) => Cesium.Color) => new Cesium.CallbackProperty((t) => pick(current(t)), false);
   const show = new Cesium.CallbackProperty(opts.show, false);
   const showLabel = new Cesium.CallbackProperty(() => opts.show() && opts.showLabels(), false);
+
+  if (opts.bubbleRadiusM !== undefined) {
+    const r = opts.bubbleRadiusM;
+    entities.add({
+      id: 'detection:bubble',
+      position,
+      ellipsoid: {
+        radii: new Cesium.Cartesian3(r, r, r),
+        material: new Cesium.ColorMaterialProperty(color((s) =>
+          s === 'critical' ? COLORS.critical.withAlpha(0.3) : s === 'screening' ? COLORS.caution.withAlpha(0.2) : COLORS.screening.withAlpha(0.08))),
+        show,
+      },
+    });
+    return;
+  }
 
   const shell = (id: string, km: number, fill: (s: Intrusion) => Cesium.Color, outline: (s: Intrusion) => Cesium.Color, label: string, labelColor: Cesium.Color) => {
     const r = km * 1000;

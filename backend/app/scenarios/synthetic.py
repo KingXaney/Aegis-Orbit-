@@ -16,15 +16,24 @@ Construction (all constants, no randomness, so every reset is identical):
 3. That TCA state is propagated **backwards** with the same model to T0, which
    becomes the secondary's initial state. Forward propagation therefore
    reproduces the encounter exactly up to integrator error (sub-metre).
-4. A few background objects populate the scene at other altitudes/planes.
+4. Three more passes make Scenario B a run of encounters (STAGED_PASSES), built the same way: a
+   fragment that passes 12 km away at T0 + 1.5 h (inside the screening radius, so it is detected,
+   but far outside the mitigation target), and two that come almost head-on later in the window.
+   Head-on, the along-track drift an earlier dodge causes barely moves a pass in its encounter
+   plane, and each of those two passes meets the primary a whole number of orbits after the
+   previous recommended burn, when that burn's radial excursion is back near zero. So the
+   operator's flow (dodge each critical pass in turn, earliest first, with the planner's
+   recommendation) meets three critical passes; tests/test_scenario_b.py runs it.
+5. A few background objects populate the scene at other altitudes/planes.
 
 Covariances and hard-body radii are scenario definitions and are labelled
 ASSUMED_ILLUSTRATIVE / SCENARIO_DEFINITION everywhere they appear.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -64,6 +73,40 @@ SECONDARY_DESIGN = SpacecraftDesign(
 )
 
 
+@dataclass(frozen=True)
+class StagedPass:
+    """A debris object defined at its designed closest approach to the primary (steps 2-3 above)."""
+    object_id: str
+    name: str
+    category: str
+    tca_offset_s: float
+    crossing_angle_deg: float  # the object's velocity is the primary's rotated by this about the local radial
+    miss_horizontal_km: float  # in the local horizontal plane, perpendicular to the relative velocity
+    miss_radial_km: float
+    radius_m: float
+    sigmas_rtn_m: Tuple[float, float, float]
+    design: Optional[SpacecraftDesign] = None
+
+
+# Scenario B's passes in time order. The TCAs of DEB-4410 and R/B-3307 are tuned to the planner's
+# recommended burns for the passes before them (T0 + 0.68 h and + 1.45 h, with leads of 1.5 orbits).
+# Their misses are tuned so that, at every step of the run, the next critical pass in time is also the
+# closest (screening ranks by miss distance, and the agent and the UI start from the top of that list);
+# their wider illustrative covariances keep them critical at those misses.
+STAGED_PASSES: Tuple[StagedPass, ...] = (
+    StagedPass("SYN-DEB-1188", "FRAGMENT-1188 (synthetic debris)", "DEBRIS", 1.5 * 3600.0, 40.0, 12.0, 0.0,
+               1.0, (120.0, 250.0, 120.0)),
+    StagedPass(SECONDARY_ID, "DEB-2047 (synthetic debris)", "DEBRIS", TCA_OFFSET_S, CROSSING_ANGLE_DEG,
+               MISS_HORIZONTAL_KM, MISS_RADIAL_KM, 2.5, (120.0, 250.0, 120.0), SECONDARY_DESIGN),
+    StagedPass("SYN-DEB-4410", "DEB-4410 (synthetic debris)", "DEBRIS", 13581.0, 176.0, 0.35, 0.10,
+               3.0, (260.0, 300.0, 260.0)),
+    StagedPass("SYN-RB-3307", "R/B-3307 (synthetic rocket body)", "ROCKET_BODY", 16353.0, 179.5, 0.47, -0.25,
+               4.0, (260.0, 300.0, 260.0)),
+)
+# the passes that need a maneuver when nothing has been dodged yet
+CRITICAL_STAGED_IDS: Tuple[str, ...] = (SECONDARY_ID, "SYN-DEB-4410", "SYN-RB-3307")
+
+
 _rotate_about = rotate_about  # kept for readers of this module; the sandbox shares the helper
 
 
@@ -83,34 +126,39 @@ def _numerical_object(object_id: str, name: str, category: str, r0: np.ndarray, 
     )
 
 
-def build_synthetic_catalog(include_debris: bool = True) -> Catalog:
-    tca_unix = T0_UNIX + TCA_OFFSET_S
-    # 1. primary at T0 and at TCA
-    r_p0, v_p0 = circular_state(R_EARTH_KM + PRIMARY_ALT_KM, PRIMARY_INC_DEG, PRIMARY_RAAN_DEG, PRIMARY_ARG_LAT_DEG)
-    y0 = np.concatenate([r_p0, v_p0])[None, :]
+def _staged_object(p: StagedPass, y0: np.ndarray) -> OrbitalObject:
+    tca_unix = T0_UNIX + p.tca_offset_s
+    # 1. the primary at this pass's TCA
     y_tca = propagate_states(y0, T0_UNIX, np.array([tca_unix]), STEP_S)[0, 0]
     r_pt, v_pt = y_tca[:3], y_tca[3:]
 
-    # 2. secondary defined at TCA
+    # 2. the object defined at TCA
     basis = rtn_basis(r_pt, v_pt)  # columns R, T, N
     R = basis[:, 0]
-    v_dir = _rotate_about(v_pt / np.linalg.norm(v_pt), R, np.radians(CROSSING_ANGLE_DEG))
+    v_dir = _rotate_about(v_pt / np.linalg.norm(v_pt), R, np.radians(p.crossing_angle_deg))
     v_rel_dir = v_dir * np.linalg.norm(v_pt) - v_pt
     v_rel_dir /= np.linalg.norm(v_rel_dir)
     horizontal = np.cross(R, v_rel_dir)  # in the local horizontal plane, perpendicular to the relative velocity
     horizontal /= np.linalg.norm(horizontal)
-    r_st = r_pt + MISS_HORIZONTAL_KM * horizontal + MISS_RADIAL_KM * R
+    r_st = r_pt + p.miss_horizontal_km * horizontal + p.miss_radial_km * R
     v_st = v_dir * np.sqrt(398600.4418 / np.linalg.norm(r_st))
 
-    # 3. back-propagate the secondary to T0
+    # 3. back-propagated to T0
     y_s0 = propagate_states(np.concatenate([r_st, v_st])[None, :], tca_unix, np.array([T0_UNIX]), STEP_S)[0, 0]
+    obj = _numerical_object(p.object_id, p.name, p.category, y_s0[:3], y_s0[3:], T0_UNIX, radius_m=p.radius_m,
+                            sigmas_rtn_m=p.sigmas_rtn_m, position_basis="SYNTHETIC_STATE")
+    if p.design is not None:
+        obj.design_override = p.design
+    return obj
 
+
+def build_synthetic_catalog(include_debris: bool = True) -> Catalog:
+    tca_unix = T0_UNIX + TCA_OFFSET_S
+    r_p0, v_p0 = circular_state(R_EARTH_KM + PRIMARY_ALT_KM, PRIMARY_INC_DEG, PRIMARY_RAAN_DEG, PRIMARY_ARG_LAT_DEG)
+    y0 = np.concatenate([r_p0, v_p0])[None, :]
     primary = _numerical_object(PRIMARY_ID, "GPM Core Observatory (synthetic state)", "PAYLOAD", r_p0, v_p0, T0_UNIX,
                                 radius_m=7.5, sigmas_rtn_m=(60.0, 200.0, 60.0), position_basis="SYNTHETIC_STATE")
     primary.design_override = PRIMARY_DESIGN
-    secondary = _numerical_object(SECONDARY_ID, "DEB-2047 (synthetic debris)", "DEBRIS", y_s0[:3], y_s0[3:], T0_UNIX,
-                                  radius_m=2.5, sigmas_rtn_m=(120.0, 250.0, 120.0), position_basis="SYNTHETIC_STATE")
-    secondary.design_override = SECONDARY_DESIGN
 
     # 4. background objects (non-threatening by design; verified by the scenario tests)
     background_defs = [
@@ -133,11 +181,15 @@ def build_synthetic_catalog(include_debris: bool = True) -> Catalog:
                     "defined at its designed closest approach and back-propagated with the same two-body + J2 "
                     "model used for screening.",
         })
-    cat = Catalog([primary, secondary] + background, source_info={
+    staged = [_staged_object(p, y0) for p in STAGED_PASSES]
+    cat = Catalog([primary] + staged + background, source_info={
         "kind": "synthetic", "scenario_id": SCENARIO_ID, "epoch": iso(T0),
         "designed_tca": iso(tca_unix), "designed_miss_km": float(np.hypot(MISS_HORIZONTAL_KM, MISS_RADIAL_KM)),
         "crossing_angle_deg": CROSSING_ANGLE_DEG,
-        "note": "States are generated deterministically; the secondary is defined at the designed TCA and "
+        "staged_passes": [{"object_id": p.object_id, "designed_tca": iso(T0_UNIX + p.tca_offset_s),
+                           "designed_miss_km": float(np.hypot(p.miss_horizontal_km, p.miss_radial_km)),
+                           "crossing_angle_deg": p.crossing_angle_deg} for p in STAGED_PASSES],
+        "note": "States are generated deterministically; each staged object is defined at its designed TCA and "
                 "back-propagated with the same two-body + J2 model used for screening.",
     })
     return cat

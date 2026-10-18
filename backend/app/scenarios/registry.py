@@ -63,8 +63,9 @@ def build_synthetic() -> Scenario:
         scenario_id=synthetic.SCENARIO_ID,
         name="Scripted conjunction (synthetic)",
         kind="synthetic",
-        description="Deterministic demonstration: a synthetic primary on a 407 km, 65° orbit meets a debris object on a "
-                    "crossing orbit three hours into the window. All states are generated, not observed.",
+        description="Deterministic demonstration: a synthetic primary on a 407 km, 65° orbit meets a run of debris "
+                    "passes over six hours: one it only needs to monitor and three critical ones it dodges in turn, "
+                    "each with the operator's approval. All states are generated, not observed.",
         primary_id=synthetic.PRIMARY_ID,
         catalog=cat,
         start_unix=w["start_unix"], end_unix=w["end_unix"],
@@ -73,7 +74,7 @@ def build_synthetic() -> Scenario:
         disclaimers=COMMON_DISCLAIMERS + [
             "Covariances in this scenario are illustrative scenario definitions, not measured uncertainties.",
         ],
-        highlight_object_ids=[synthetic.SECONDARY_ID],
+        highlight_object_ids=list(synthetic.CRITICAL_STAGED_IDS),
     )
 
 

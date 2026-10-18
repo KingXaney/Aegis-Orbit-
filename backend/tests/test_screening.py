@@ -30,8 +30,9 @@ def test_refinement_improves_on_coarse_sample(synthetic_catalog, synthetic_windo
 
 
 def test_background_objects_do_not_threaten(synthetic_screening):
+    # only the staged passes come inside the screening radius
     secondaries = {c.secondary_id for c in synthetic_screening.conjunctions}
-    assert secondaries == {synthetic.SECONDARY_ID}
+    assert secondaries == {p.object_id for p in synthetic.STAGED_PASSES}
 
 
 def test_local_minima_detection():

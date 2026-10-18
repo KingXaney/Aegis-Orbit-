@@ -63,7 +63,7 @@ export default function App() {
           <GlobeView />
         </div>
         {/* before the HUD, so the object inspector stays on top if the two meet */}
-        <SatelliteInset className="pointer-events-none absolute bottom-[112px] right-3 h-[200px] w-[280px]">
+        <SatelliteInset className="pointer-events-none absolute bottom-[112px] right-3 h-[200px] w-[280px]" expandedClassName="absolute inset-0">
           <GlobeView variant="inset" />
         </SatelliteInset>
         {/* the change of course while a dodge burn is near: above the close-up, bottom right */}
