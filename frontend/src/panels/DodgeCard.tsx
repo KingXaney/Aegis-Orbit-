@@ -84,18 +84,18 @@ export default function DodgeCard({ className = '' }: { className?: string }) {
 
   return (
     <div className={className} aria-live="polite">
-      <div className={`rounded border bg-panel/90 p-2.5 text-[10px] backdrop-blur transition-colors duration-300 ${phase === 'firing' ? 'border-[#a3e635] shadow-[0_0_18px_rgba(163,230,53,0.35)]' : 'border-line'}`}>
+      <div className={`hud p-3 text-[11px] transition-[border-color,box-shadow] duration-300 ${phase === 'firing' ? '!border-burn !shadow-[0_0_0_1px_var(--color-burn),0_0_18px_rgba(163,230,53,0.35)]' : ''}`}>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Dodge burn</span>
-          {phase === 'armed' && <Badge tone="warn">in {formatCountdown(m.burn_time_unix - now).slice(1)}</Badge>}
+          <span className="display text-[15px] leading-5 text-text">Dodge burn</span>
+          {phase === 'armed' && <Badge tone="warn">in {formatCountdown(m.burn_time_unix - now).slice(2)}</Badge>}
           {phase === 'firing' && <Badge tone="safe" className="motion-safe:animate-pulse">firing</Badge>}
-          {phase === 'done' && <Badge tone="neutral">burned {formatCountdown(m.burn_time_unix - now).slice(1)} ago</Badge>}
+          {phase === 'done' && <Badge tone="neutral">burned {formatCountdown(m.burn_time_unix - now).slice(2)} ago</Badge>}
         </div>
         <div className="mt-1 text-[11px] text-text">
           <span className="mono">{m.direction}</span> {m.dv_magnitude_mps.toFixed(2)} m/s · {nozzle.nozzle}
         </div>
         <div className="text-dim">{nozzle.effect}.</div>
-        <svg viewBox="0 0 270 110" className="mt-1.5 w-full" role="img" aria-label={`Velocity before and after the burn; the pass with ${objectName} widens from ${formatKm(before)} to ${formatKm(m.post_miss_distance_km)}`}>
+        <svg viewBox="0 0 270 110" className="mt-1.5 w-full max-md:hidden" role="img" aria-label={`Velocity before and after the burn; the pass with ${objectName} widens from ${formatKm(before)} to ${formatKm(m.post_miss_distance_km)}`}>
           <defs>
             <marker id="dodge-arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b" /></marker>
             <marker id="dodge-arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf" /></marker>
@@ -103,11 +103,11 @@ export default function DodgeCard({ className = '' }: { className?: string }) {
             <filter id="dodge-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
           </defs>
           {/* frame */}
-          <text x="4" y="10" fill="#64748b" fontSize="8" fontFamily="JetBrains Mono, Menlo, monospace">R ↑  T →</text>
+          <text x="4" y="10" fill="#64748b" fontSize="8" fontFamily="IBM Plex Mono, Menlo, monospace">R ↑  T →</text>
           {/* original path and the pass on it */}
           <path d={`M${ox},${oy} Q${ox + 95},${oy - 6} ${ox + 190},${oy - 10}`} fill="none" stroke="#67e8f9" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8" />
           <circle cx={ox + 176} cy={oy - 9} r="4" fill="#f87171" />
-          <text x={ox + 176} y={oy - 16} textAnchor="middle" fill="#f87171" fontSize="8" fontFamily="JetBrains Mono, Menlo, monospace">{formatKm(before)}</text>
+          <text x={ox + 176} y={oy - 16} textAnchor="middle" fill="#f87171" fontSize="8" fontFamily="IBM Plex Mono, Menlo, monospace">{formatKm(before)}</text>
           {/* new path, deflected away from the pass */}
           <path
             d={`M${ox},${oy} Q${ox + 95},${oy - 6 + deflect} ${ox + 190},${oy - 10 + deflect * 2.2}`}
@@ -117,7 +117,7 @@ export default function DodgeCard({ className = '' }: { className?: string }) {
             style={{ transition: 'd 600ms ease-out, opacity 300ms', opacity: phase === 'armed' ? 0.35 : 1 }}
           />
           {phase !== 'armed' && (
-            <text x={ox + 190} y={oy - 10 + deflect * 2.2 + (deflect >= 0 ? 12 : -6)} textAnchor="end" fill="#2dd4bf" fontSize="8" fontFamily="JetBrains Mono, Menlo, monospace">{formatKm(m.post_miss_distance_km)}</text>
+            <text x={ox + 190} y={oy - 10 + deflect * 2.2 + (deflect >= 0 ? 12 : -6)} textAnchor="end" fill="#2dd4bf" fontSize="8" fontFamily="IBM Plex Mono, Menlo, monospace">{formatKm(m.post_miss_distance_km)}</text>
           )}
           {/* velocity before and after */}
           <line x1={ox} y1={oy} x2={ox + vLen} y2={oy} stroke="#64748b" strokeWidth="2" markerEnd="url(#dodge-arrow-grey)" />
@@ -135,11 +135,11 @@ export default function DodgeCard({ className = '' }: { className?: string }) {
           <g style={{ transformOrigin: `${ox + vLen}px ${oy}px`, transform: `scale(${grow})`, transition: 'transform 400ms ease-out' }} filter={phase === 'firing' ? 'url(#dodge-glow)' : undefined}>
             <line x1={ox + vLen} y1={oy} x2={ox + vLen + ux * ARROW} y2={oy + uy * ARROW} stroke="#a3e635" strokeWidth="3" markerEnd="url(#dodge-arrow-lime)" />
           </g>
-          <text x={ox + vLen + ux * ARROW + (ux >= 0 ? 6 : -6)} y={oy + uy * ARROW + (uy <= 0 ? -4 : 12)} textAnchor={ux >= 0 ? 'start' : 'end'} fill="#a3e635" fontSize="9" fontWeight="600" fontFamily="JetBrains Mono, Menlo, monospace">Δv</text>
-          {Math.abs(dvN) > 1e-6 && <text x="4" y="104" fill="#64748b" fontSize="8" fontFamily="JetBrains Mono, Menlo, monospace">cross-track component {dvN > 0 ? '+' : '−'}{Math.abs(dvN).toFixed(2)} m/s</text>}
+          <text x={ox + vLen + ux * ARROW + (ux >= 0 ? 6 : -6)} y={oy + uy * ARROW + (uy <= 0 ? -4 : 12)} textAnchor={ux >= 0 ? 'start' : 'end'} fill="#a3e635" fontSize="9" fontWeight="600" fontFamily="IBM Plex Mono, Menlo, monospace">Δv</text>
+          {Math.abs(dvN) > 1e-6 && <text x="4" y="104" fill="#64748b" fontSize="8" fontFamily="IBM Plex Mono, Menlo, monospace">cross-track component {dvN > 0 ? '+' : '−'}{Math.abs(dvN).toFixed(2)} m/s</text>}
           {/* the spacecraft */}
           <circle cx={ox} cy={oy} r="4.5" fill="#67e8f9" stroke="#05080f" strokeWidth="1.5" />
-          <text x={ox} y={oy + 16} textAnchor="middle" fill="#94a3b8" fontSize="8" fontFamily="JetBrains Mono, Menlo, monospace">v before (grey) · after (teal)</text>
+          <text x={ox} y={oy + 16} textAnchor="middle" fill="#94a3b8" fontSize="8" fontFamily="IBM Plex Mono, Menlo, monospace">v before (grey) · after (teal)</text>
         </svg>
         <div className="mt-1 text-muted">
           {objectName}: pass {formatKm(before)} → <span className="text-text">{formatKm(m.post_miss_distance_km)}</span> at {formatUtc(m.post_tca, false)}

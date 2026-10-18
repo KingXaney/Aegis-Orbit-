@@ -72,7 +72,7 @@ export default function TimelineBar() {
   const disabled = !scenario;
 
   return (
-    <div className="pointer-events-auto rounded border border-line bg-panel/90 px-3 py-2 backdrop-blur">
+    <div className="hud pointer-events-auto px-3 py-2">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
           <Button size="sm" variant="ghost" onClick={() => controller.reset()} disabled={disabled} title="Rewind to window start" aria-label="Rewind">
@@ -82,7 +82,7 @@ export default function TimelineBar() {
             {sim.playing ? '❚❚ Pause' : '▶ Play'}
           </Button>
           <label className="sr-only" htmlFor="speed">Simulation speed</label>
-          <select id="speed" value={sim.speed} onChange={(e) => setSpeed(Number(e.target.value))} disabled={disabled} className="rounded border border-line-strong bg-panel-2 px-1.5 py-1 text-[11px] text-text">
+          <select id="speed" value={sim.speed} onChange={(e) => setSpeed(Number(e.target.value))} disabled={disabled} className="hud-select mono h-7 text-[11px]">
             {SPEED_OPTIONS.map((v) => (
               <option key={v} value={v}>
                 {v}×
@@ -136,15 +136,15 @@ export default function TimelineBar() {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <div className="hidden xl:block">
-            <div className="text-[9px] uppercase tracking-wider text-dim">Simulation time</div>
+            <div className="text-[10px] text-dim">Simulation time</div>
             <div className="mono text-xs text-text">{formatUtc(sim.currentUnix)}</div>
           </div>
           <div className="xl:hidden">
-            <div className="text-[9px] uppercase tracking-wider text-dim">Sim time</div>
+            <div className="text-[10px] text-dim">Sim time</div>
             <div className="mono text-xs text-text">{formatUtc(sim.currentUnix, false)}</div>
           </div>
           <div className="w-[96px]">
-            <div className="text-[9px] uppercase tracking-wider text-dim">To closest approach</div>
+            <div className="text-[10px] text-dim">To closest approach</div>
             <div className={`mono text-xs ${tToTca !== null && tToTca > 0 && tToTca < 900 ? 'text-threat' : 'text-text'}`}>{tToTca === null ? '—' : formatCountdown(tToTca)}</div>
           </div>
           {maneuver && (

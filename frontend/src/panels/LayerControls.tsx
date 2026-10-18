@@ -10,9 +10,9 @@ export default function LayerControls() {
   const scenario = useAppStore((s) => s.scenario);
 
   return (
-    <details className="pointer-events-auto w-[230px] rounded border border-line bg-panel/85 p-3 backdrop-blur xl:w-[300px]">
-      <summary className="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Globe camera &amp; layers</summary>
-      <div className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Camera</div>
+    <details className="hud pointer-events-auto w-[230px] px-3 py-2 xl:w-[300px]">
+      <summary className="flex min-h-8 cursor-pointer select-none items-center rounded-md text-[12px] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-primary">Camera &amp; layers</summary>
+      <h3 className="display mb-1.5 mt-2 text-[14px] text-text">Camera</h3>
       <div className="mb-1.5 flex gap-1.5">
         <Button size="sm" variant={cameraMode === 'world' ? 'primary' : 'secondary'} onClick={() => setCameraMode('world')} title="Look around the Earth as it turns beneath the orbit">
           World
@@ -29,7 +29,7 @@ export default function LayerControls() {
           ? 'The camera stays still in space while the Earth turns under the orbit. Drag to look around the Earth, scroll to zoom.'
           : 'The camera rides behind and above the spacecraft, in its orbit plane, so the path ahead reads as one line. Drag to look around it, scroll to zoom out for orbit context.'}
       </p>
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Layers</div>
+      <h3 className="display mb-1 text-[14px] text-text">Layers</h3>
       <div className="grid grid-cols-1 gap-1">
         <Toggle label="Planned path & ghost courses" checked={layers.original} onChange={() => toggleLayer('original')} swatch="#2dd4bf" />
         <Toggle label="Threat object path" checked={layers.secondary} onChange={() => toggleLayer('secondary')} swatch="#f87171" />

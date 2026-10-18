@@ -1,15 +1,20 @@
 @import 'tailwindcss';
 
+/* The mission simulator shares the home page's flight-deck identity: graphite neutrals, B612 for the
+   interface, Barlow Condensed for titles and readouts, IBM Plex Mono for figures. Magenta (primary) is
+   the operator's own controls; the data inks match what the globe draws (cyan spacecraft, teal planned
+   path, lime burn, red threat), so a colour means the same thing in the HUD and in orbit. */
 @theme {
-  --color-bg: #05080f;
-  --color-panel: #0b1220;
-  --color-panel-2: #101a2c;
-  --color-line: #1e2a42;
-  --color-line-strong: #2d3d5c;
-  --color-text: #d7e1f2;
-  --color-muted: #7f90ad;
-  --color-dim: #56657f;
-  --color-primary: #67e8f9;
+  --color-bg: #0b0d10;
+  --color-panel: #14171c;
+  --color-panel-2: #1c2027;
+  --color-line: #2a3038;
+  --color-line-strong: #646d7b; /* control outlines: at least 3:1 on every surface */
+  --color-text: #e8eaed;
+  --color-muted: #9aa3af;
+  --color-dim: #838c99; /* tertiary text, still 4.5:1 on the raised surface */
+  --color-primary: #ff5fd2;
+  --color-primary-hover: #ff85de;
   --color-tracked: #93c5fd;
   --color-threat: #f87171;
   --color-threat-strong: #ef4444;
@@ -17,8 +22,12 @@
   --color-safe-strong: #22c55e;
   --color-warn: #fbbf24;
   --color-accent: #a5b4fc;
-  --font-sans: 'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+  --color-craft: #67e8f9;
+  --color-path: #2dd4bf;
+  --color-burn: #a3e635;
+  --font-sans: 'B612', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+  --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
 }
 
 html,
@@ -46,15 +55,164 @@ body,
 
 .mono {
   font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
 .scrollbar-thin::-webkit-scrollbar {
   width: 6px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #243250;
+  background: var(--color-line-strong);
   border-radius: 3px;
+}
+
+/* ------------------------------------------------------------ mission HUD
+   Floating panels over the globe are solid, never frosted, and carry the only shadow. */
+@layer components {
+  .hud {
+    background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 0.04) inset,
+      0 2px 4px rgb(0 0 0 / 0.35),
+      0 16px 40px -12px rgb(0 0 0 / 0.7);
+  }
+
+  /* A checkbox drawn as a switch: still a native input, so labels, keyboard and screen readers just work. */
+  .switch {
+    appearance: none;
+    position: relative;
+    flex-shrink: 0;
+    width: 30px;
+    height: 18px;
+    margin: 0;
+    border-radius: 999px;
+    border: 1px solid var(--color-line-strong);
+    background: var(--color-bg);
+    cursor: pointer;
+    transition: background-color 160ms var(--x-ease), border-color 160ms var(--x-ease);
+  }
+  .switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--color-muted);
+    transition: transform 160ms var(--x-ease), background-color 160ms var(--x-ease);
+  }
+  /* on reads as light, not magenta: the accent stays for the one main action on screen */
+  .switch:checked {
+    border-color: var(--color-text);
+    background: var(--color-text);
+  }
+  .switch:checked::after {
+    transform: translateX(12px);
+    background: var(--color-bg);
+  }
+  .switch:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  .switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  /* The look-ahead rail: the stretch the autopilot has not screened yet is hatched. */
+  .rail-unscreened {
+    background-image: repeating-linear-gradient(-45deg, rgb(255 255 255 / 0.06) 0 2px, transparent 2px 6px);
+  }
+
+  /* Native selects in the HUD: one chevron, the same height as the buttons beside them. */
+  .hud-select {
+    appearance: none;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 6px;
+    background-color: var(--color-bg);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%239aa3af' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    background-size: 14px;
+    padding: 0 26px 0 8px;
+    color: var(--color-text);
+    transition: border-color 160ms var(--x-ease);
+  }
+  .hud-select:hover:not(:disabled) {
+    border-color: var(--color-muted);
+  }
+  .hud-select:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  .hud-select:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+/* The close-up's zoom slider: a visible track (the timeline's scrubber draws its own). */
+input[type='range'].hud-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range'].hud-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+input[type='range'].hud-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+input[type='range'].hud-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: var(--color-text);
+  border: 3px solid var(--color-panel);
+  box-shadow: 0 0 0 1px var(--color-line-strong);
+}
+input[type='range'].hud-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-text);
+  border: 3px solid var(--color-panel);
+}
+input[type='range'].hud-range:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes hud-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+.hud-in {
+  animation: hud-in 200ms var(--x-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-in { animation: none; }
+  .switch, .switch::after { transition: none; }
 }
 
 input[type='range'].scrubber {

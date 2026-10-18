@@ -30,6 +30,8 @@ export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'in
   const cameraMode = useAppStore((s) => s.cameraMode);
   const insetZoom = useAppStore((s) => s.insetZoom);
   const insetResetNonce = useAppStore((s) => s.insetResetNonce);
+  const insetRangeRequest = useAppStore((s) => s.insetRangeRequest);
+  const setInsetCamera = useAppStore((s) => s.setInsetCamera);
   const selectObject = useAppStore((s) => s.selectObject);
   const selectManeuver = useAppStore((s) => s.selectManeuver);
   const setSceneReady = useAppStore((s) => s.setSceneReady);
@@ -48,6 +50,7 @@ export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'in
             else if (kind === 'candidate' && id) selectManeuver(id);
           },
           onBurnFiring: inset ? undefined : (info) => setBurnFiring(info),
+          onCameraRange: inset ? setInsetCamera : undefined,
         },
         import.meta.env.VITE_CESIUM_ION_TOKEN || undefined,
         { inset },
@@ -141,6 +144,10 @@ export default function GlobeView({ variant = 'main' }: { variant?: 'main' | 'in
   useEffect(() => {
     if (inset && insetResetNonce > 0) sceneRef.current?.resetCamera();
   }, [insetResetNonce]);
+
+  useEffect(() => {
+    if (inset && insetRangeRequest.nonce > 0) sceneRef.current?.setCameraRange(insetRangeRequest.rangeM);
+  }, [insetRangeRequest]);
 
   return <div ref={containerRef} className="absolute inset-0" aria-label={inset ? 'Close-up of the satellite' : '3D orbital simulation'} />;
 }

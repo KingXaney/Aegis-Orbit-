@@ -13,16 +13,16 @@ function PanelHeader() {
   const sim = useSimulation();
   return (
     <header className="border-b border-line px-4 py-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">Mission intelligence</div>
-          <div className="truncate text-xs text-text">{scenario?.name ?? 'No scenario loaded'}</div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="display text-[19px] leading-6 text-text">Mission intelligence</h1>
+          <div className="truncate text-[11px] text-muted">{scenario?.name ?? 'No scenario loaded'}</div>
         </div>
         <ThreatBadge state={simulation?.overall_threat_state} large />
       </div>
-      <div className="mt-2 flex items-center justify-between text-[10px] text-dim">
+      <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-dim">
         <span className="mono">{formatUtc(sim.currentUnix)}</span>
-        <span>research prototype · simulation only</span>
+        <span>Research prototype, simulation only</span>
       </div>
     </header>
   );
@@ -261,7 +261,7 @@ function CandidatesSection() {
       </div>
       <table className="w-full border-collapse">
         <thead>
-          <tr className="text-left text-[9px] uppercase tracking-wider text-dim">
+          <tr className="text-left text-[10px] text-dim">
             <th className="px-1 py-1 font-medium">ID</th>
             <th className="px-1 py-1 font-medium">Burn</th>
             <th className="px-1 py-1 font-medium">Δv m/s</th>
@@ -323,7 +323,7 @@ function DecisionSection() {
       {!m && <Empty>Select a candidate maneuver to approve or reject it. Approval only updates the simulation.</Empty>}
       {committed.length > 0 && (
         <div className="mb-2 rounded border border-safe/30 bg-safe/5 px-2 py-2 text-[10px]">
-          <div className="mb-1 font-semibold uppercase tracking-wider text-muted">Committed burns (part of the trajectory)</div>
+          <div className="mb-1 font-semibold text-muted">Committed burns (part of the trajectory)</div>
           <ul className="space-y-0.5">
             {committed.map((b) => (
               <li key={b.maneuver_id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5" title={b.maneuver_id}>
@@ -408,15 +408,20 @@ function DecisionSection() {
   );
 }
 
-const EVENT_TONE: Record<string, string> = {
-  COMMITTED: 'text-safe',
-  UNCOMMITTED: 'text-warn',
-  SPAWNED: 'text-tracked',
-  CLOSEST_APPROACH: 'text-muted',
-  AWAITING_APPROVAL: 'text-warn',
-  UNAVOIDABLE: 'text-threat',
-  AUTOPILOT: 'text-primary',
-  ANCHORED: 'text-dim',
+// the event log's dot per kind, in the same inks as the globe and the look-ahead rail
+const EVENT_INK: Record<string, string> = {
+  COMMITTED: 'bg-burn',
+  UNCOMMITTED: 'bg-warn',
+  SPAWNED: 'bg-muted',
+  CLOSEST_APPROACH: 'bg-tracked',
+  AWAITING_APPROVAL: 'bg-warn',
+  UNAVOIDABLE: 'bg-threat',
+  AUTOPILOT: 'bg-primary',
+  ANCHORED: 'bg-line-strong',
+};
+const eventKindLabel = (kind: string) => {
+  const t = kind.replace(/_/g, ' ').toLowerCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
 };
 
 /** Sandbox only: the autopilot's state, what it has flown, and the event log. */
@@ -434,58 +439,65 @@ function SandboxSection() {
   const waiting = sandbox.lastActions.filter((a) => a.outcome === 'AWAITING_APPROVAL');
   return (
     <Section title="Autopilot" right={<Toggle label={sandbox.autopilot ? 'Engaged' : 'Off'} checked={sandbox.autopilot} onChange={() => void setAutopilot(!sandbox.autopilot)} />}>
-      <div className="grid grid-cols-3 gap-2">
-        <Stat label="Junk spawned" value={sandbox.spawnedIds.length} />
-        <Stat label="Burns" value={`${fired}/${committed.length}`} sub="fired / committed" />
-        <Stat label="Δv used" value={`${totalDv.toFixed(2)} m/s`} sub={committed.length ? `${(totalDv / committed.length).toFixed(2)} m/s per dodge` : 'no burns yet'} />
-      </div>
-      <p className="mt-1 text-[10px] text-dim">
+      <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-line bg-line">
+        {[
+          ['Junk spawned', String(sandbox.spawnedIds.length), `of ${sandbox.junkTypes?.max_objects ?? 25}`],
+          ['Burns fired', `${fired}/${committed.length}`, 'of committed'],
+          ['Δv used', `${totalDv.toFixed(2)}`, committed.length ? `m/s, ${(totalDv / committed.length).toFixed(2)} per dodge` : 'm/s, no burns yet'],
+        ].map(([label, value, sub]) => (
+          <div key={label} className="min-w-0 bg-panel px-2.5 py-2">
+            <dt className="text-[10px] text-dim">{label}</dt>
+            <dd className="display text-[22px] leading-7 text-text tabular-nums">{value}</dd>
+            <dd className="truncate text-[10px] text-dim">{sub}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-2 text-[11px] leading-[17px] text-muted [text-wrap:pretty]">
         {sandbox.autopilot
-          ? 'The simulation screens the next two orbits, plans a burn for every pass that needs one (both the probability and the 5 km distance target) and flies it. Nothing commands a real spacecraft.'
-          : 'Planned burns wait in Human decision for your approval.'}
-        {waiting.length > 0 && ` ${waiting.length} burn${waiting.length === 1 ? '' : 's'} waiting for approval.`}
+          ? 'The autopilot screens the next two orbits, plans a burn for every pass that misses either target (probability or 5 km distance) and flies it. Nothing commands a real spacecraft.'
+          : 'Planned burns wait under Human decision for your approval.'}
+        {waiting.length > 0 && <span className="text-warn"> {waiting.length} burn{waiting.length === 1 ? ' is' : 's are'} waiting for approval.</span>}
       </p>
       {committed.length > 0 && (
-        <table className="mt-2 w-full border-collapse">
-          <thead>
-            <tr className="text-left text-[9px] uppercase tracking-wider text-dim">
-              <th className="px-1 py-1 font-medium">Burn (UTC)</th>
-              <th className="px-1 py-1 font-medium">Δv</th>
-              <th className="px-1 py-1 font-medium">Pass after</th>
-              <th className="px-1 py-1 font-medium">By</th>
-              <th className="px-1 py-1 font-medium">State</th>
-            </tr>
-          </thead>
-          <tbody>
-            {committed.slice().reverse().map((m) => (
-              <tr key={m.maneuver_id} className="border-t border-line text-[10px]" title={m.maneuver_id}>
-                <td className="mono whitespace-nowrap px-1 py-1 text-text">{formatUtc(m.burn_time, false).slice(0, 8)}</td>
-                <td className="mono whitespace-nowrap px-1 py-1 text-text">{m.direction} {m.dv_magnitude_mps.toFixed(2)}</td>
-                <td className="mono px-1 py-1 text-muted">{formatKm(m.post_miss_distance_km)}</td>
-                <td className="px-1 py-1 text-muted">{m.source === 'autopilot' ? 'autopilot' : 'you'}</td>
-                <td className="px-1 py-1">{m.burn_time_unix <= sim.currentUnix ? <Badge tone="safe">fired</Badge> : <Badge tone="info">upcoming</Badge>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ol className="mt-3 divide-y divide-line rounded-md border border-line">
+          {committed.slice().reverse().map((m) => {
+            const done = m.burn_time_unix <= sim.currentUnix;
+            return (
+              <li key={m.maneuver_id} className="flex items-center gap-2.5 px-2.5 py-1.5 text-[11px]" title={m.maneuver_id}>
+                <i aria-hidden="true" className={`block h-2 w-2 shrink-0 rotate-45 rounded-[1px] ${done ? 'bg-burn' : 'border border-burn'}`} />
+                <span className="mono text-text">{formatUtc(m.burn_time, false).slice(0, 8)}</span>
+                <span className="mono text-muted">
+                  {m.direction} {m.dv_magnitude_mps.toFixed(2)} m/s
+                </span>
+                <span className="min-w-0 flex-1 truncate text-dim">pass at {formatKm(m.post_miss_distance_km)}, {m.source === 'autopilot' ? 'autopilot' : 'you'}</span>
+                <span className={done ? 'text-burn' : 'text-tracked'}>{done ? 'Fired' : 'Upcoming'}</span>
+              </li>
+            );
+          })}
+        </ol>
       )}
       {unavoidable.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-[10px] text-threat">
-          {unavoidable.slice(-3).map((e) => <li key={e.seq}>• {e.message}</li>)}
+        <ul className="mt-2 space-y-1 rounded-md border border-threat/40 bg-threat/10 px-2.5 py-2 text-[11px] text-threat">
+          {unavoidable.slice(-3).map((e) => <li key={e.seq}>{e.message}</li>)}
         </ul>
       )}
-      <div className="mt-2">
+      <div className="mt-3">
         <Details summary={`Event log (${events.length})`} open>
-          <ul className="scrollbar-thin max-h-48 space-y-0.5 overflow-y-auto text-[10px]">
-            {events.length === 0 && <li className="text-dim">Nothing yet: spawn some junk.</li>}
+          <ol className="scrollbar-thin max-h-56 space-y-1.5 overflow-y-auto pr-1 text-[11px]">
+            {events.length === 0 && <li className="text-dim">Nothing yet. Spawn some junk from the Space junk tray.</li>}
             {events.slice().reverse().slice(0, 60).map((e) => (
-              <li key={e.seq}>
-                <span className="mono text-dim">{e.at ? formatUtc(e.at, false).slice(0, 8) : '—'}</span>{' '}
-                <span className={EVENT_TONE[e.kind] ?? 'text-muted'}>{e.kind.replace(/_/g, ' ').toLowerCase()}</span>{' '}
-                <span className="text-muted">{e.message}</span>
+              <li key={e.seq} className="grid grid-cols-[auto_1fr] gap-x-2">
+                <i aria-hidden="true" className={`mt-[5px] block h-1.5 w-1.5 rounded-full ${EVENT_INK[e.kind] ?? 'bg-muted'}`} />
+                <div className="min-w-0">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-text">{eventKindLabel(e.kind)}</span>
+                    <span className="mono text-[10px] text-dim">{e.at ? formatUtc(e.at, false).slice(0, 8) : ''}</span>
+                  </div>
+                  <p className="leading-[16px] text-muted [overflow-wrap:anywhere]">{e.message}</p>
+                </div>
               </li>
             ))}
-          </ul>
+          </ol>
         </Details>
       </div>
     </Section>

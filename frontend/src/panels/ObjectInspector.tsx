@@ -26,10 +26,10 @@ export default function ObjectInspector() {
     b === 'PROPAGATED_FROM_GP_ELEMENTS' ? 'propagated from GP elements (SGP4)' : b === 'SYNTHETIC_STATE' ? 'synthetically generated state' : (b ?? '—');
 
   return (
-    <div className="pointer-events-auto w-[320px] rounded border border-line bg-panel/90 backdrop-blur">
+    <div className="hud hud-in pointer-events-auto w-[320px] max-w-[calc(100vw-24px)]">
       <header className="flex items-center justify-between border-b border-line px-3 py-2">
         <div className="min-w-0">
-          <div className="truncate text-xs font-semibold text-text">{name}</div>
+          <div className="display truncate text-[16px] leading-5 text-text">{name}</div>
           <div className="mono truncate text-[10px] text-muted">{selectedObjectId}</div>
         </div>
         <div className="flex items-center gap-1">
@@ -59,7 +59,7 @@ export default function ObjectInspector() {
         {summary?.warnings?.length ? <div className="rounded border border-warn/40 bg-warn/10 px-2 py-1 text-warn">{summary.warnings.join(' · ')}</div> : null}
         <div>
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wider text-dim">State at {st ? formatUtc(st.at, false) : 'sim time'}</span>
+            <span className="text-[10px] text-dim">State at {st ? formatUtc(st.at, false) : 'sim time'}</span>
             <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loading}>
               {loading ? <Spinner /> : 'Refresh at sim time'}
             </Button>

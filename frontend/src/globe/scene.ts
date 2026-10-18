@@ -26,6 +26,14 @@ export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
   /** A committed burn started (`{ maneuverId }`) or stopped (`null`) firing. */
   onBurnFiring?: (info: { maneuverId: string } | null) => void;
+  /** Close-up only: the camera's distance to what it follows, and the zoom range, as they change. */
+  onCameraRange?: (range: CameraRange) => void;
+}
+
+export interface CameraRange {
+  rangeM: number;
+  minM: number;
+  maxM: number;
 }
 
 export interface SceneOptions {
@@ -77,6 +85,10 @@ const WORLD_RANGE_M = 21_000_000; // from the Earth's centre: the globe spans ab
 const WORLD_MIN_ZOOM_M = 7_000_000; // zooming toward the centre stops above the surface
 // Follow's zoom floor lets the camera reach the model itself.
 const MIN_ZOOM_M = 2;
+// The close-up zooms out far enough to see junk in the outer pass band around the spacecraft, not the
+// whole Earth, and steps more gently than Cesium's default so a wheel notch never jumps a decade.
+const INSET_MAX_ZOOM_M = 60_000;
+const INSET_ZOOM_FACTOR = 3;
 // Tracking offset (metres, entity-local frame) for a primary whose model is not available yet.
 const FALLBACK_VIEW_FROM = new Cesium.Cartesian3(-60, 35, 25);
 const POINT_OUTLINE = Cesium.Color.fromCssColorString('#05080f');
@@ -133,10 +145,11 @@ const BLAST_EMBER_PX = 70;
  */
 const CONVERGE_S = 20;
 /**
- * Following a ghost, the camera starts GHOST_VIEW_RANGE_M off it, looking across the line the debris
- * will come in on (so the debris crosses the frame into the ghost instead of arriving from behind the
- * camera); the ghost is drawn enlarged to GHOST_MIN_PIXELS so it reads from there. Set once, when the
- * view switches to the ghost: the user's drag and zoom are never overridden.
+ * Following a ghost, the camera looks across the line the debris will come in on (so the debris crosses
+ * the frame into the ghost instead of arriving from behind the camera). Switching between the spacecraft
+ * and a ghost keeps the camera's distance, so the view does not jump; GHOST_VIEW_RANGE_M is only the
+ * starting distance when nothing was tracked before. The ghost is drawn enlarged to GHOST_MIN_PIXELS when
+ * it would read smaller. Set once, when the view switches: the user's drag and zoom are never overridden.
  */
 const GHOST_VIEW_RANGE_M = 2000;
 const GHOST_MIN_PIXELS = 48;
@@ -353,6 +366,8 @@ export class GlobeScene {
       input.enableZoom = true;
       input.enableTranslate = false;
       input.enableLook = false;
+      input.maximumZoomDistance = INSET_MAX_ZOOM_M;
+      input.zoomFactor = INSET_ZOOM_FACTOR;
     }
     this.viewer.clock.shouldAnimate = false;
     this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
@@ -375,6 +390,7 @@ export class GlobeScene {
     });
     this.postRenderRemover = scene.postRender.addEventListener(() => {
       this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
+      if (this.inset) this.reportCameraRange();
     });
     this.cloud = this.inset ? null : new CatalogCloud(this.viewer, controller);
 
@@ -1344,13 +1360,26 @@ export class GlobeScene {
     return this.primaryEntity;
   }
 
-  /** Re-track when the wanted entity changed (a ghost arrived, died, or the tab moved); a change re-applies the default offset. */
+  /**
+   * Re-track when the wanted entity changed (a ghost arrived, died, or the tab moved). The new target
+   * gets its own viewing direction, at the distance the camera already had from the old one.
+   */
   private syncTrackedEntity(): void {
     if (this.destroyed || this.cameraMode !== 'follow') return;
     const want = this.trackedEntity();
     if (!want || this.viewer.trackedEntity === want) return;
-    want.viewFrom = this.viewFromFor(want);
+    // tracking puts the camera in a frame centred on its target, so its position is the range
+    const range = this.viewer.trackedEntity ? Cesium.Cartesian3.magnitude(this.viewer.camera.position) : null;
+    want.viewFrom = range ? this.atRange(this.viewFromFor(want), range) : this.viewFromFor(want);
     this.viewer.trackedEntity = want;
+  }
+
+  /** `offset`'s direction at `rangeM` (clamped to the follow zoom range). */
+  private atRange(offset: Cesium.Cartesian3, rangeM: number): Cesium.Cartesian3 {
+    const [lo, hi] = this.zoomLimits();
+    const n = Cesium.Cartesian3.magnitude(offset);
+    if (!(n > 0) || !(rangeM > 0)) return offset;
+    return Cesium.Cartesian3.multiplyByScalar(offset, Math.min(hi, Math.max(lo, rangeM)) / n, new Cesium.Cartesian3());
   }
 
   /** Close-up: is this piece of junk heading for what the close-up follows? */
@@ -1406,15 +1435,44 @@ export class GlobeScene {
     this.layers = { ...layers };
   }
 
+  /** The zoom range for the current view: around the followed object in Follow, the Earth in World. */
+  private zoomLimits(): [number, number] {
+    if (this.cameraMode === 'follow' && this.viewer.trackedEntity) {
+      // never inside the spacecraft's own envelope
+      const r = this.primaryId ? this.models.get(this.primaryId)?.envelopeRadiusM ?? 0 : 0;
+      return [Math.max(MIN_ZOOM_M * 2, 1.2 * r), this.inset ? INSET_MAX_ZOOM_M : 5_000_000];
+    }
+    return [WORLD_MIN_ZOOM_M, 80_000_000];
+  }
+
   /** Zoom toward what the camera looks at by `factor` (> 1 closer): the spacecraft in Follow, the Earth in World. */
   zoomCamera(factor: number): void {
     if (this.destroyed || !(factor > 0)) return;
-    const camera = this.viewer.camera;
     // in both modes the camera sits in a frame centred on its target, so its position is the range
+    this.setCameraRange(Cesium.Cartesian3.magnitude(this.viewer.camera.position) / factor);
+  }
+
+  /** Put the camera `rangeM` from what it looks at (clamped to the view's zoom range), keeping its direction. */
+  setCameraRange(rangeM: number): void {
+    if (this.destroyed || !(rangeM > 0)) return;
+    const camera = this.viewer.camera;
     const range = Cesium.Cartesian3.magnitude(camera.position);
-    const [lo, hi] = this.cameraMode === 'follow' && this.viewer.trackedEntity ? [MIN_ZOOM_M * 2, 5_000_000] : [WORLD_MIN_ZOOM_M, 80_000_000];
-    const target = Math.min(hi, Math.max(lo, range / factor));
-    camera.zoomIn(range - target);
+    const [lo, hi] = this.zoomLimits();
+    camera.zoomIn(range - Math.min(hi, Math.max(lo, rangeM)));
+  }
+
+  private lastReportedRange: CameraRange | null = null;
+  /** Close-up: tell the UI the camera's distance when it moves by more than 1 % (or the limits change). */
+  private reportCameraRange(): void {
+    if (!this.callbacks.onCameraRange || !this.viewer.trackedEntity) return;
+    const rangeM = Cesium.Cartesian3.magnitude(this.viewer.camera.position);
+    const [minM, maxM] = this.zoomLimits();
+    // the wheel obeys the same floor (it is only known once the spacecraft's model has loaded)
+    this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = minM;
+    const last = this.lastReportedRange;
+    if (last && Math.abs(last.rangeM - rangeM) <= 0.01 * rangeM && last.minM === minM && last.maxM === maxM) return;
+    this.lastReportedRange = { rangeM, minM, maxM };
+    this.callbacks.onCameraRange(this.lastReportedRange);
   }
 
   setCameraMode(mode: CameraMode): void {

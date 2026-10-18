@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
 import { detectionRadii } from '../globe/detectionRadius';
-import type { CameraMode, LayerFlags } from '../globe/scene';
+import type { CameraMode, CameraRange, LayerFlags } from '../globe/scene';
 import { nextThreat } from '../lib/nextThreat';
 import { SPEED_OPTIONS, controller, type ControllerState } from '../simulation/controller';
 import { eventWithin } from '../simulation/events';
@@ -121,6 +121,12 @@ export interface AppState {
   insetZoom: { factor: number; nonce: number };
   /** Bumped to put the close-up back on its default view of the spacecraft. */
   insetResetNonce: number;
+  /** The close-up fills the stage (a focus view) instead of sitting in the corner. */
+  insetExpanded: boolean;
+  /** The close-up camera's distance to what it follows and its zoom range, as the scene reports them. */
+  insetCamera: CameraRange | null;
+  /** A distance asked for from the UI (the zoom slider); the nonce makes each request an event. */
+  insetRangeRequest: { rangeM: number; nonce: number };
   selectedObjectId: string | null;
   objectDetail: ObjectDetail | null;
   objectDetailLoading: boolean;
@@ -182,6 +188,9 @@ export interface AppState {
   setBurnFiring: (info: { maneuverId: string } | null) => void;
   zoomInset: (factor: number) => void;
   resetInset: () => void;
+  setInsetExpanded: (expanded: boolean) => void;
+  setInsetCamera: (range: CameraRange) => void;
+  requestInsetRange: (rangeM: number) => void;
   /** Every clock notification: rolling data, sandbox evaluation, slow motion around passes. */
   onClockTick: (state: ControllerState) => void;
   /** The work of onClockTick (separate so a tick caused by a tick is ignored). */
@@ -341,6 +350,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   autoSlowSkip: null,
   insetZoom: { factor: 1, nonce: 0 },
   insetResetNonce: 0,
+  insetExpanded: false,
+  insetCamera: null,
+  insetRangeRequest: { rangeM: 0, nonce: 0 },
   selectedObjectId: null,
   objectDetail: null,
   objectDetailLoading: false,
@@ -681,6 +693,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
   zoomInset: (factor) => set({ insetZoom: { factor, nonce: get().insetZoom.nonce + 1 } }),
   resetInset: () => set({ insetResetNonce: get().insetResetNonce + 1 }),
+  setInsetExpanded: (expanded) => set({ insetExpanded: expanded }),
+  setInsetCamera: (range) => set({ insetCamera: range }),
+  requestInsetRange: (rangeM) => set({ insetRangeRequest: { rangeM, nonce: get().insetRangeRequest.nonce + 1 } }),
 
   // ---------------------------------------------------------------- the live loop (sandbox)
   onClockTick: (st) => {
