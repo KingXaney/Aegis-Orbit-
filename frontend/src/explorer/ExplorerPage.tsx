@@ -29,11 +29,6 @@ function SiteHeader() {
       <a href="/" aria-current="page" className="x-display x-focus inline-flex min-h-10 items-center rounded-[4px] text-x-21">
         Aegis Orbit
       </a>
-      <nav aria-label="Pages">
-        <a href="/mission" className="x-link text-x-14">
-          Simulator
-        </a>
-      </nav>
     </div>
   );
 }
@@ -261,7 +256,7 @@ export default function ExplorerPage() {
         <h1 className="x-display mt-8 text-x-28 lg:mt-10 2xl:text-x-36">Aegis Orbit predicts close approaches in orbit and plans the burn that avoids them.</h1>
         <p className="mt-4 text-x-16 text-x-muted">It screens a spacecraft against the public catalog, states the uncertainty in every number, and waits for a person to approve the burn.</p>
         <a href="/mission" className="x-button x-button-primary mt-6 w-full sm:w-auto">
-          Plan an avoidance burn
+          Simulate Collision
         </a>
         <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
       </header>
