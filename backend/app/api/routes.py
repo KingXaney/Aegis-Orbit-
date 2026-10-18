@@ -16,12 +16,12 @@ from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproachesR
                               AutopilotRequest, CatalogRefreshResponse, EvaluateRequest, EvaluateResponse,
                               JunkTypesResponse, RemoveRequest, RemoveResponse, SpawnBatchResponse, SpawnRandomRequest,
                               SpawnRequest, SpawnResponse,
-                              CatalogResponse, DataRefreshResponse,
+                              CatalogResponse, CatalogTlesResponse, DataRefreshResponse, DrillRequest, DrillResponse,
                               DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PerceptionModelInfo,
                               PerceptionResponse, PlanRequest, PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
                               ScreenResponse, SecondaryCheckRequest, SecondaryCheckResponse, SimulationState,
                               TrajectoryBatchRequest, TrajectoryBatchResponse, TrajectoryResponse)
-from ..simulation import explorer_screening, sandbox, service
+from ..simulation import drill, explorer_screening, sandbox, service
 from ..simulation.session import get_store
 
 router = APIRouter(prefix="/api")
@@ -81,6 +81,19 @@ def reset_scenario(scenario_id: str, live: bool = Query(default=False, descripti
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return service.scenario_detail(sess)
+
+
+@router.get("/scenarios/{scenario_id}/catalog-tles", response_model=CatalogTlesResponse)
+def scenario_catalog_tles(scenario_id: str):
+    """Element rows for every catalogued object (the mission page's point cloud propagates them with SGP4)."""
+    return _call(service.catalog_tles, _session(scenario_id))
+
+
+@router.post("/scenarios/{scenario_id}/drill", response_model=DrillResponse)
+def scenario_drill(scenario_id: str, req: DrillRequest):
+    """Inject one labelled drill threat into the real-data scenario and re-screen (reset removes it)."""
+    sess = _session(scenario_id)
+    return _call(drill.inject, sess, _now(sess, req.now))
 
 
 @router.get("/objects", response_model=ObjectListResponse)

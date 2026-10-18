@@ -4,7 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from ..config import get_settings
 from ..data.catalog import Catalog
+from ..perception import perception
+from ..physics import screening
 from ..physics.time_utils import iso
 from . import real, synthetic
 
@@ -23,6 +26,8 @@ class Scenario:
     pc_policy: str
     disclaimers: List[str] = field(default_factory=list)
     highlight_object_ids: List[str] = field(default_factory=list)
+    # Large catalogs only: the fixed ML shortlist every screening uses (perception.screening_shortlist).
+    screening_shortlist: Optional[perception.ScreeningShortlist] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,6 +46,7 @@ class Scenario:
             "rejected_records": len(self.catalog.rejected),
             "disclaimers": list(self.disclaimers),
             "sandbox": self.kind == "sandbox",
+            "screening_shortlist": self.screening_shortlist.public() if self.screening_shortlist else None,
         }
 
 
@@ -93,17 +99,45 @@ def build_sandbox() -> Scenario:
     )
 
 
+def _shortlisted_passes(primary, cat: Catalog, shortlist: perception.ScreeningShortlist, w: Dict[str, float]) -> List[str]:
+    """Secondaries of the passes the shortlist screening finds, closest first: the only catalog objects
+    the full-catalog scenario precomputes trajectories for (the browser draws the rest as a point cloud)."""
+    s = get_settings()
+    ids = set(shortlist.object_ids)
+    result = screening.screen(primary, [o for o in cat.others(primary.object_id) if o.object_id in ids],
+                              w["start_unix"], w["end_unix"], screening_radius_km=s.screening_radius_km,
+                              coarse_step_s=s.screening_coarse_step_s, altitude_margin_km=s.altitude_filter_margin_km,
+                              co_orbital_min_speed_kms=s.co_orbital_min_relative_speed_kms,
+                              numerical_step_s=s.planner_numerical_step_s, apply_altitude_filter=False)
+    return list(dict.fromkeys(c.secondary_id for c in result.conjunctions))
+
+
 def build_real(live: bool = False) -> Scenario:
-    cat = real.build_live_catalog() if live else real.load_fixture_catalog()
+    cat = real.build_live_catalog() if live else (real.load_full_catalog() or real.load_fixture_catalog())
     w = real.scenario_window(cat)
     real.flag_stale_records(cat, w["start_unix"])
     primary = cat.require(real.PRIMARY_ID)
-    # Render the primary plus the objects closest to it in altitude band (bounded for browser performance).
-    others = sorted(cat.others(real.PRIMARY_ID),
-                    key=lambda o: abs(0.5 * ((o.perigee_alt_km or 0) + (o.apogee_alt_km or 0)) -
-                                      0.5 * ((primary.perigee_alt_km or 0) + (primary.apogee_alt_km or 0))))
-    rendered = [real.PRIMARY_ID] + [o.object_id for o in others[:80]]
+    shortlist = perception.screening_shortlist(primary, cat.others(real.PRIMARY_ID), w["start_unix"])
+    if shortlist:
+        rendered = [real.PRIMARY_ID] + _shortlisted_passes(primary, cat, shortlist, w)
+    else:
+        # Render the primary plus the objects closest to it in altitude band (bounded for browser performance).
+        others = sorted(cat.others(real.PRIMARY_ID),
+                        key=lambda o: abs(0.5 * ((o.perigee_alt_km or 0) + (o.apogee_alt_km or 0)) -
+                                          0.5 * ((primary.perigee_alt_km or 0) + (primary.apogee_alt_km or 0))))
+        rendered = [real.PRIMARY_ID] + [o.object_id for o in others[:80]]
     src = cat.source_info
+    tracked = len(perception.valid_others(primary, cat.values()))
+    if shortlist:
+        shortlist_note = [f"Full catalog: {tracked:,} tracked objects. The ML model scores them all; physics screening, "
+                          f"secondary checks and perception use one fixed shortlist of {len(shortlist.object_ids):,} "
+                          f"objects (the model's top {shortlist.ml_top_k} plus every object within "
+                          f"{shortlist.band_margin_km:g} km of the station's altitude band)."]
+    elif tracked > get_settings().perception_full_screen_max_objects:
+        shortlist_note = [f"No perception model could be loaded: every one of the {tracked:,} tracked objects is "
+                          f"physics-screened on each request (slow), and the ML funnel is unavailable."]
+    else:
+        shortlist_note = []
     return Scenario(
         scenario_id=real.SCENARIO_ID,
         name="ISS vs. cataloged objects (real GP data)",
@@ -120,7 +154,8 @@ def build_real(live: bool = False) -> Scenario:
         disclaimers=COMMON_DISCLAIMERS + [
             f"Elements retrieved {src.get('retrieved_at') or 'unknown'}; accuracy degrades with age from each epoch.",
             "No conjunction is forced in this scenario. If nothing noteworthy appears, switch to the synthetic one.",
-        ],
+        ] + shortlist_note,
+        screening_shortlist=shortlist,
     )
 
 

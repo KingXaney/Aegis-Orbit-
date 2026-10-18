@@ -12,7 +12,7 @@ window).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -23,7 +23,7 @@ from ..physics import maneuver_planner as mp
 from ..physics import secondary_screening as ss
 from ..physics import screening
 from ..perception.model import load_risk_model
-from ..perception.perception import perceive
+from ..perception.perception import ScreeningShortlist, perceive, valid_others
 from ..physics.frames import ecef_to_geodetic, osculating_elements, teme_to_ecef
 from ..physics.propagation import MODEL_NUMERICAL, burn_times, original_of, propagate
 from ..physics.threat import ORDER, evaluate_threat_state, meets_mitigation_target, thresholds_summary, worst_state
@@ -58,12 +58,53 @@ def scenario_detail(sess: SimulationSession) -> Dict[str, Any]:
 
 
 def list_objects(sess: SimulationSession) -> Dict[str, Any]:
+    """Every object's summary, or, for a shortlisted (full-catalog) scenario, only the primary, the rendered
+    objects and the shortlist: 18k summaries are ~19 MB, and the browser draws the rest from catalog_tles."""
+    scen = sess.scenario
+    objs = objs_all = scen.catalog.values()
+    partial = bool(scen.screening_shortlist)
+    if partial:
+        keep = {scen.primary_id, *scen.rendered_object_ids, *scen.highlight_object_ids,
+                *scen.screening_shortlist.object_ids}
+        objs = [o for o in objs if o.object_id in keep]
     return {
         "scenario_id": sess.scenario_id,
-        "primary_id": sess.scenario.primary_id,
-        "objects": [o.summary() for o in sess.scenario.catalog.values()],
-        "rejected_records": sess.scenario.catalog.rejected[:50],
+        "primary_id": scen.primary_id,
+        "objects": [o.summary() for o in objs],
+        "rejected_records": scen.catalog.rejected[:50],
+        "catalog_total": len(valid_others(scen.catalog.require(scen.primary_id), objs_all)),
+        "partial": partial,
     }
+
+
+def catalog_tles(sess: SimulationSession) -> Dict[str, Any]:
+    """Compact element rows for every catalogued (TLE) object except the primary: the browser propagates
+    them with SGP4 to draw the whole catalog as a point cloud."""
+    scen = sess.scenario
+    rows = [[o.object_id, o.name.strip(), o.category, o.tle_line1, o.tle_line2] for o in scen.catalog.values()
+            if o.object_id != scen.primary_id and o.tle_line1 and o.tle_line2 and o.validation_status != "INVALID"]
+    src = scen.catalog.source_info
+    return {"scenario_id": sess.scenario_id, "primary_id": scen.primary_id, "count": len(rows),
+            "fields": ["object_id", "name", "category", "line1", "line2"], "rows": rows,
+            "source": src.get("fixture") or src.get("kind"), "retrieved_at": src.get("retrieved_at")}
+
+
+def _screening_objects(sess: SimulationSession, primary_id: str) -> Tuple[List[OrbitalObject], Optional[ScreeningShortlist]]:
+    """What a screening of ``primary_id`` runs against: the scenario's fixed ML shortlist when it has one
+    (full catalog), otherwise every other object. Baseline and post-burn screens use the same set."""
+    scen = sess.scenario
+    others = scen.catalog.others(primary_id)
+    shortlist = scen.screening_shortlist
+    if not shortlist or primary_id != scen.primary_id:
+        return others, None
+    ids = set(shortlist.object_ids)
+    return [o for o in others if o.object_id in ids], shortlist
+
+
+def _shortlist_stats(sess: SimulationSession, primary_id: str, shortlist: Optional[ScreeningShortlist]) -> Dict[str, Any]:
+    catalog = sess.scenario.catalog
+    return {"catalog_total": len(valid_others(catalog.require(primary_id), catalog.values())),
+            "shortlist": shortlist.public() if shortlist else None}
 
 
 def profile_for(sess: SimulationSession) -> PlannerProfile:
@@ -253,7 +294,7 @@ def run_screening(sess: SimulationSession, primary_id: Optional[str] = None, sta
         sess.clock_unix = float(t0)
     radius = screening_radius_km or settings.screening_radius_km
     with sess.lock:
-        objects = scen.catalog.others(primary_id)
+        objects, shortlist = _screening_objects(sess, primary_id)
         try:
             result = screening.screen(primary, objects, t0, t1, screening_radius_km=radius,
                                       coarse_step_s=settings.screening_coarse_step_s,
@@ -262,6 +303,7 @@ def run_screening(sess: SimulationSession, primary_id: Optional[str] = None, sta
                                       numerical_step_s=settings.planner_numerical_step_s)
         except ValueError as exc:
             raise BadRequest(str(exc)) from exc
+        result.stats.update(_shortlist_stats(sess, primary_id, shortlist))
         for c in result.conjunctions:
             sec = scen.catalog.require(c.secondary_id)
             c.pc = cp.compute_pc_for_conjunction(c, primary, sec, policy)
@@ -377,7 +419,7 @@ def run_secondary_check(sess: SimulationSession, maneuver_id: str,
         window_end_unix = sess.screening_window[1] if sess.screening_window else scen.end_unix
     window_end_unix = max(float(window_end_unix), float(cand.post_tca_unix) + 900.0)
     with sess.lock:
-        objects = scen.catalog.others(primary.object_id)
+        objects, _ = _screening_objects(sess, primary.object_id)
         # Objects co-orbital with the primary in the baseline screening share its elements (vehicles docked to
         # the ISS): they move with it when it burns, so the post-burn path is not screened against them.
         docked = {x["object_id"]: x["name"].strip() for x in (sess.screening or {}).get("co_orbital", [])}

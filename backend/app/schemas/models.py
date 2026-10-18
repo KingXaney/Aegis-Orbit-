@@ -45,6 +45,7 @@ class ScenarioDetail(BaseModel):
     thresholds: Dict[str, Any]
     simulation: "SimulationState"
     sandbox: bool = False
+    screening_shortlist: Optional[Dict[str, Any]] = None
 
 
 class SpacecraftDesignModel(BaseModel):
@@ -93,6 +94,18 @@ class ObjectListResponse(BaseModel):
     primary_id: str
     objects: List[ObjectSummary]
     rejected_records: List[Dict[str, Any]] = []
+    catalog_total: Optional[int] = None
+    partial: bool = Field(default=False, description="only the primary, rendered and shortlisted objects are listed")
+
+
+class CatalogTlesResponse(BaseModel):
+    scenario_id: str
+    primary_id: str
+    count: int
+    fields: List[str]
+    rows: List[List[str]]
+    source: Optional[str] = None
+    retrieved_at: Optional[str] = None
 
 
 class StateAtTime(BaseModel):
@@ -389,6 +402,19 @@ class SpawnResponse(BaseModel):
     simulation: SimulationState
 
 
+class DrillRequest(BaseModel):
+    now: str = Field(description="simulation time of the injection, ISO 8601 UTC")
+
+
+class DrillResponse(BaseModel):
+    scenario_id: str
+    now: str
+    now_unix: float
+    object: ObjectSummary
+    designed: Dict[str, Any]
+    screening: "ScreenResponse"
+
+
 class SpawnRandomRequest(BaseModel):
     scenario_id: str
     now: str
@@ -553,6 +579,7 @@ class PerceptionResponse(BaseModel):
     screening_mode: str
     objects: List[PerceptionObject]
     counts: Dict[str, int]
+    funnel: Optional[Dict[str, Any]] = None
     model: PerceptionModelInfo
     stats: Dict[str, Any]
     co_orbital: List[Dict[str, Any]] = []

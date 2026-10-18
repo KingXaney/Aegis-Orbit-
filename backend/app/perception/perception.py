@@ -14,6 +14,7 @@ distance and time. Tiers:
 from __future__ import annotations
 
 import time
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -154,6 +155,77 @@ def _select_physics_set(primary: OrbitalObject, objects: List[OrbitalObject], sc
                              f"the primary's altitude band ({len(subset)} screened)"]
 
 
+@dataclass
+class ScreeningShortlist:
+    """The fixed object set a large catalog is screened against, chosen once per scenario build (see
+    ``screening_shortlist``). ``info`` is what the API reports about it; objects injected later (a drill)
+    join through ``add``."""
+    object_ids: List[str]
+    catalog_total: int  # valid objects besides the primary
+    ml_top_k: int
+    band_margin_km: float
+    band_count: int
+    ml_flagged: int
+    threshold: float
+    model_version: Optional[str]
+    scored_at: str
+    score_duration_s: float
+    note: Optional[str] = None
+    basis: str = "model top-K for the original primary plus the guaranteed altitude band, fixed for the session"
+
+    def add(self, object_id: str) -> None:
+        if object_id not in self.object_ids:
+            self.object_ids.append(object_id)
+
+    def public(self) -> Dict[str, Any]:
+        """Everything but the id list, plus its size."""
+        d = asdict(self)
+        d.pop("object_ids")
+        return {**d, "size": len(self.object_ids)}
+
+    def describe(self, screened: int) -> str:
+        return (f"catalog has {self.catalog_total:,} objects: physics screening limited to the session's fixed shortlist, "
+                f"the model's top {self.ml_top_k} plus the {self.band_count} objects within {self.band_margin_km:g} km "
+                f"of the primary's altitude band ({screened} screened)")
+
+
+def screening_shortlist(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_ref_unix: float,
+                        settings: Optional[Settings] = None, model: Optional[RiskModel] = None) -> Optional[ScreeningShortlist]:
+    """The shortlist for a catalog above ``perception_full_screen_max_objects``: the model's top K for the
+    primary plus every object within the guaranteed altitude band. Screening, secondary checks and
+    perception all use this one set, so a post-burn screen compares like with like. None when the catalog
+    is small enough to screen in full, or when no model loads (then everything is screened)."""
+    settings = settings or get_settings()
+    valid = valid_others(primary, objects)
+    if len(valid) <= settings.perception_full_screen_max_objects:
+        return None
+    model = model or load_risk_model(settings.perception_model_meta_file)
+    scores, _, note, score_s = _score(model, primary, valid, t_ref_unix)
+    if np.isnan(scores).all():
+        return None
+    subset, _, _ = _select_physics_set(primary, valid, scores, settings)
+    band = altitude_overlap_filter(primary, valid, settings.perception_guaranteed_band_margin_km)
+    thr = settings.perception_ml_watch_threshold
+    if thr is None:
+        thr = model.info.threshold if model.info.threshold is not None else 0.5
+    return ScreeningShortlist(
+        object_ids=[o.object_id for o in subset], catalog_total=len(valid), ml_top_k=settings.perception_screen_top_k,
+        band_margin_km=settings.perception_guaranteed_band_margin_km, band_count=len(band),
+        ml_flagged=int(np.count_nonzero(np.nan_to_num(scores, nan=-1.0) >= thr)), threshold=float(thr),
+        model_version=model.info.model_version, scored_at=iso(t_ref_unix), score_duration_s=round(score_s, 4), note=note)
+
+
+def valid_others(primary: OrbitalObject, objects: Sequence[OrbitalObject]) -> List[OrbitalObject]:
+    """The objects a screening of ``primary`` considers (what ``catalog_total`` counts)."""
+    return [o for o in objects if o.validation_status != "INVALID" and o.object_id != primary.object_id]
+
+
+def _shortlist_set(objects: List[OrbitalObject], shortlist: ScreeningShortlist) -> Tuple[List[OrbitalObject], str, List[str]]:
+    ids = set(shortlist.object_ids)
+    subset = [o for o in objects if o.object_id in ids]
+    return subset, MODE_ML, [shortlist.describe(len(subset))]
+
+
 def _screen_variant(pobj: OrbitalObject, t0: float, t1: float, objects, tracked_km: float, settings: Settings,
                     pc_policy: str, catalog, full: bool):
     """One screening over the horizon; the piecewise primary handles its burn arcs itself, so a pass
@@ -235,7 +307,11 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
     t_wall = time.time()
     objects = [o for o in catalog.others(primary.object_id) if o.validation_status != "INVALID"]
     scores, elements_basis, ml_note, score_s = _score(model, pobj, objects, hz["start_unix"])
-    physics_set, mode, limitations = _select_physics_set(pobj, objects, scores, settings)
+    shortlist = scen.screening_shortlist
+    if shortlist:
+        physics_set, mode, limitations = _shortlist_set(objects, shortlist)
+    else:
+        physics_set, mode, limitations = _select_physics_set(pobj, objects, scores, settings)
     t_scr = time.time()
     found, seg_stats, co_orbital, failures, coarse, complete = _screen_variant(
         pobj, hz["start_unix"], hz["end_unix"], physics_set, tracked, settings, pc_policy, catalog, full=(mode == MODE_FULL))
@@ -337,9 +413,20 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
         e["rank"] = i + 1
     counts = {t: sum(1 for e in entries if e["tier"] == t) for t in TIER_ORDER}
     counts["HIDDEN"] = n_hidden
+    flagged_ids = ([o.object_id for i, o in enumerate(objects) if not np.isnan(scores[i]) and scores[i] >= watch_thr]
+                   if watch_thr is not None else [])
     counts.update({"total": len(objects), "physics_screened": len(physics_set),
                    "ml_scored": int(np.count_nonzero(~np.isnan(scores))), "co_orbital": len(co_orbital),
-                   "failed": len(failures), "encounters": len(found)})
+                   "failed": len(failures), "encounters": len(found), "ml_flagged": len(flagged_ids)})
+    # The funnel the mission page plays: tracked -> flagged by the model -> physics-screened -> confirmed -> critical.
+    funnel = {
+        "tracked": len(objects), "ml_scored": counts["ml_scored"], "ml_flagged": len(flagged_ids),
+        "flagged_ids": flagged_ids, "threshold": watch_thr,
+        "screened": len(physics_set), "screened_ids": [o.object_id for o in physics_set],
+        "passes": len(found), "confirmed_ids": sorted({c.secondary_id for c, _, _ in found}),
+        "critical_ids": sorted({e["object_id"] for e in entries if e["tier"] == "CRITICAL"}),
+        "shortlist": shortlist.public() if shortlist else None,
+    }
     thresholds = {"critical_radius_km": critical, "tracked_radius_km": tracked, "horizon_s": hz["horizon_s"],
                   "near_field_horizon_s": settings.perception_near_field_horizon_s, "ml_watch_threshold": watch_thr,
                   "coarse_step_s": settings.screening_coarse_step_s,
@@ -351,7 +438,7 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
                             "burn_time": iso(cand.burn_time_unix) if cand else None,
                             "burn_times_unix": burn_times(pobj), "segments": arcs},
         "horizon": hz, "thresholds": thresholds, "tier_rules": tier_rules(critical, tracked, watch_thr),
-        "screening_mode": mode, "objects": entries, "counts": counts, "model": model.info.to_dict(),
+        "screening_mode": mode, "objects": entries, "counts": counts, "funnel": funnel, "model": model.info.to_dict(),
         "stats": {"duration_s": round(time.time() - t_wall, 3), "score_duration_s": round(score_s, 4),
                   "screen_duration_s": round(screen_s, 3), "segments": seg_stats},
         "co_orbital": co_orbital, "propagation_failures": failures, "complete": complete,

@@ -1,13 +1,16 @@
-"""Real-data scenario: ISS and a catalog subset from cached CelesTrak elements.
+"""Real-data scenario: ISS and the cached CelesTrak catalog.
 
-The committed fixture (data/scenarios/real_catalog.tle + .meta.json) makes the
-scenario usable offline. ``refresh`` rebuilds the catalog from freshly
+The committed fixtures make the scenario usable offline: the full catalog
+(data/scenarios/real_catalog_full.tle.gz, every object in the five groups) when
+present, else the 400-object altitude-band subset (real_catalog.tle + .meta.json).
+``refresh`` rebuilds the catalog from freshly
 downloaded CelesTrak groups when network access is allowed. No conjunction is
 fabricated: the scenario shows whatever the screening finds, and the UI
 offers the synthetic scenario when nothing noteworthy is present.
 """
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +26,9 @@ SCENARIO_ID = "real-iss"
 PRIMARY_ID = "NORAD-25544"
 FIXTURE_TLE = REPO_ROOT / "data" / "scenarios" / "real_catalog.tle"
 FIXTURE_META = REPO_ROOT / "data" / "scenarios" / "real_catalog.meta.json"
+# The same download, every object kept (scripts/build_real_fixture.py --full): what the ML funnel filters.
+FULL_FIXTURE_TLE = REPO_ROOT / "data" / "scenarios" / "real_catalog_full.tle.gz"
+FULL_FIXTURE_META = REPO_ROOT / "data" / "scenarios" / "real_catalog_full.meta.json"
 WINDOW_HOURS = 24.0
 REFRESH_GROUPS = ["stations", "active", "cosmos-2251-debris", "iridium-33-debris", "fengyun-1c-debris"]
 MAX_OBJECTS = 400
@@ -51,6 +57,25 @@ def load_fixture_catalog() -> Catalog:
     cat = Catalog(objs, rejected, {"kind": "real", "scenario_id": SCENARIO_ID, "fixture": str(FIXTURE_TLE.name),
                                    "retrieved_at": meta.get("retrieved_at"), "groups": meta.get("groups"),
                                    "filter": meta.get("filter"), "note": meta.get("note"), "live_refresh": False})
+    _apply_overrides(cat)
+    return cat
+
+
+def load_full_catalog() -> Optional[Catalog]:
+    """Every tracked object in the cached groups (the catalog the perception model filters), from the
+    gzipped full fixture; None when that fixture is not present."""
+    if not FULL_FIXTURE_TLE.exists():
+        return None
+    meta = json.loads(FULL_FIXTURE_META.read_text()) if FULL_FIXTURE_META.exists() else {}
+    retrieved_at = parse_iso(meta["retrieved_at"]) if meta.get("retrieved_at") else None
+    text = gzip.decompress(FULL_FIXTURE_TLE.read_bytes()).decode("utf-8")
+    objs, rejected = parse_tle_text(text, source="celestrak",
+                                    source_detail="cached full catalog (" + ", ".join(meta.get("groups", [])) + ")",
+                                    retrieved_at=retrieved_at)
+    cat = Catalog(objs, rejected, {"kind": "real", "scenario_id": SCENARIO_ID, "fixture": FULL_FIXTURE_TLE.name,
+                                   "retrieved_at": meta.get("retrieved_at"), "groups": meta.get("groups"),
+                                   "filter": meta.get("filter"), "note": meta.get("note"), "live_refresh": False,
+                                   "full_catalog": True})
     _apply_overrides(cat)
     return cat
 

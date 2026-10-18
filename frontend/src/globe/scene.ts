@@ -7,6 +7,7 @@ import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, ScreenRespon
 import { TimeBridge, temeToFixed, temeToFixedMatrix, temeVelocityToFixed } from './frames';
 import { SpacecraftModel } from './spacecraft';
 import { addDetectionRadius } from './detectionRadius';
+import { CatalogCloud } from '../perception/catalogCloud';
 import { INITIAL_PLUME, advancePlume, plumeIntensity, type BurnRef, type PlumeState } from './thrusters';
 
 export interface LayerFlags {
@@ -174,6 +175,8 @@ export class GlobeScene {
   private preUpdateRemover: Cesium.Event.RemoveCallback;
   private postUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
+  /** The real ISS scenario's whole-catalog point cloud, styled by the ML funnel (main view only). */
+  private readonly cloud: CatalogCloud | null;
   private cameraMode: CameraMode = 'world';
   /** Set when the world view is (re)framed: the camera offset (TEME, metres) to apply on the next frame. */
   private pendingWorldOffset: Cesium.Cartesian3 | null = null;
@@ -276,6 +279,7 @@ export class GlobeScene {
     this.postRenderRemover = scene.postRender.addEventListener(() => {
       this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
     });
+    this.cloud = this.inset ? null : new CatalogCloud(this.viewer, controller);
 
     this.handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
     this.handler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
@@ -1049,6 +1053,7 @@ export class GlobeScene {
     this.preUpdateRemover();
     this.postUpdateRemover();
     this.postRenderRemover();
+    this.cloud?.destroy();
     for (const id of [...this.models.keys()]) this.removeModel(id);
     this.handler.destroy();
     this.viewer.destroy();

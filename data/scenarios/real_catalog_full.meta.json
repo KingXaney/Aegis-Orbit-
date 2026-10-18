@@ -1,0 +1,49 @@
+{
+  "source": "CelesTrak GP data (https://celestrak.org/NORAD/elements/)",
+  "groups": [
+    "active",
+    "cosmos-2251-debris",
+    "fengyun-1c-debris",
+    "iridium-33-debris",
+    "stations"
+  ],
+  "retrieved_at": "2026-10-17T15:59:10Z",
+  "built_at": "2026-10-18T01:21:42Z",
+  "primary_norad_id": 25544,
+  "primary_name": "ISS (ZARYA)",
+  "filter": {
+    "rule": "none: every object in the groups (full catalog)",
+    "full_catalog": true
+  },
+  "object_count": 18599,
+  "records_parsed": 18604,
+  "records_rejected": 0,
+  "excluded": [
+    {
+      "norad_id": 25575,
+      "name": "ISS (UNITY)",
+      "reason": "ISS module/co-located entry"
+    },
+    {
+      "norad_id": 26400,
+      "name": "ISS (ZVEZDA)",
+      "reason": "ISS module/co-located entry"
+    },
+    {
+      "norad_id": 26700,
+      "name": "ISS (DESTINY)",
+      "reason": "ISS module/co-located entry"
+    },
+    {
+      "norad_id": 36086,
+      "name": "POISK",
+      "reason": "ISS module/co-located entry"
+    },
+    {
+      "norad_id": 49044,
+      "name": "ISS (NAUKA)",
+      "reason": "ISS module/co-located entry"
+    }
+  ],
+  "note": "Mean elements fitted by the data provider; positions derived from them are SGP4 estimates, not live telemetry. Accuracy degrades with age from each record's epoch."
+}

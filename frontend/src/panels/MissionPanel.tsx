@@ -5,6 +5,7 @@ import { Badge, Button, Details, Empty, ErrorText, KeyValue, Section, Spinner, S
 import { formatCountdown, formatDuration, formatKm, formatPc, formatUtc, pcLabel } from '../lib/format';
 import type { Conjunction, Maneuver } from '../types/api';
 import CandidateChart from './CandidateChart';
+import PerceptionSection from '../perception/PerceptionSection';
 
 function PanelHeader() {
   const scenario = useAppStore((s) => s.scenario);
@@ -50,6 +51,8 @@ function ThreatSection() {
   const runScreening = useAppStore((s) => s.runScreening);
   const sim = useSimulation();
   const stats = screening?.stats as Record<string, unknown> | undefined;
+  // full-catalog scenario: screening ran on the ML shortlist, not on every tracked object
+  const shortlistPrefix = stats?.shortlist ? `ML shortlist: ${String(stats.objects_total)} of ${String(stats.catalog_total)} tracked objects screened · ` : '';
 
   if (error) return <Section title="Active threat"><ErrorText>Screening failed: {error}</ErrorText></Section>;
   if (loading) {
@@ -122,7 +125,7 @@ function ThreatSection() {
             {screening.conjunctions.map((x) => <ConjunctionRow key={x.conjunction_id} c={x} selected={x.conjunction_id === c.conjunction_id} onSelect={() => selectConjunction(x.conjunction_id)} />)}
           </div>
           {screening.co_orbital.length > 0 && <div className="mt-1 text-[10px] text-dim">Excluded as co-orbital/docked: {screening.co_orbital.map((x) => x.name.trim()).join(', ')}</div>}
-          <div className="mt-1 text-[10px] text-dim">{String(stats?.candidates_after_altitude_filter)} of {String(stats?.objects_total)} objects passed the altitude-band filter · coarse step {String(stats?.coarse_step_s)} s · {screening.stats.complete ? 'complete' : 'incomplete (propagation failures)'}</div>
+          <div className="mt-1 text-[10px] text-dim">{shortlistPrefix}{String(stats?.candidates_after_altitude_filter)} of {String(stats?.objects_total)} objects passed the altitude-band filter · coarse step {String(stats?.coarse_step_s)} s · {screening.stats.complete ? 'complete' : 'incomplete (propagation failures)'}</div>
           {scenario?.kind === 'real' && (
             <div className="mt-2 flex gap-2">
               <Button size="sm" variant="ghost" onClick={() => void runScreening('illustrative_default')} title="Compute Pc with documented placeholder covariances (labelled illustrative)">
@@ -496,6 +499,7 @@ export default function MissionPanel() {
       <PanelHeader />
       <div className="scrollbar-thin flex-1 overflow-y-auto">
         <SandboxSection />
+        <PerceptionSection />
         <ThreatSection />
         <AgentSection />
         <CandidatesSection />

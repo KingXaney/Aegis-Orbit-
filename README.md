@@ -19,7 +19,7 @@ environment.
 5. Plans candidate maneuvers with a documented grid search and objective (delta-v cost vs. risk reduction).
 6. Re-screens every candidate's post-burn trajectory against the catalog (secondary screening).
 7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
-8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed.
+8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed. On the real ISS scenario the mission page plays it as a funnel over the full 18,598-object catalog and ends in an operator decision (see Scenario A).
 9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
 10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path.
 11. Offers a live **sandbox** (Scenario C): the clock runs open-ended, you drop space junk onto the orbit (three kinds with different pass distances), and an **autopilot** screens it, plans a burn that meets both the probability and the 5 km distance target, secondary-checks it and flies it, with the spacecraft's thrusters firing on the model when the burn happens.
@@ -116,14 +116,33 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 4. Compare candidates in the table and chart (Δv, post-burn miss distance, post-burn Pc, target met, secondary screening status). Click a row or a green path to select it; **Jump to burn** moves the clock to the burn.
 5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision and commits the burn into the spacecraft's trajectory: the teal band now bends at the burn, the path before it stays dashed cyan for one orbit for comparison, and in the **Follow** view the thrusters fire (a plume on the nozzle opposite to the Δv) when the clock reaches the burn; from the World view a flare marks it. Burns are append-only in time, so later passes are handled in order; the next critical pass is selected for you. **Withdraw** (in Human decision) takes the latest unfired burn back out. **Reset** returns the scenario to the identical initial state.
 
-### Scenario A — real GP data
+### Scenario A — real GP data and the ML perception funnel
 
-ISS (NORAD 25544) screened against 399 cached CelesTrak objects whose altitude band overlaps the station's.
-No conjunction is fabricated: the screening reports whatever it finds (typically several 5–25 km passes
-within 24 h). Because public elements carry no covariance, probabilities are reported as **UNVERIFIED**
-and states are `MONITORING`/`UNVERIFIED`; the optional *illustrative covariance* re-screen is clearly labelled.
-Docked vehicles sharing the station's elements are excluded as co-orbital. Use `POST /api/data/refresh`
-(or `POST /api/scenarios/real-iss/reset?live=true`) to download fresh elements when online.
+Open <http://localhost:5173/mission?scenario=real-iss> (or pick **A** in the scenario menu). The ISS (NORAD 25544)
+against the full cached CelesTrak snapshot: every object in the five groups, 18,598 besides the station
+(`data/scenarios/real_catalog_full.tle.gz`), drawn on the globe as a point cloud that the browser propagates with
+SGP4. The catalog comes from ground tracking; nothing is sensed on board. No conjunction is fabricated.
+
+1. Press **Run ML perception** at the top of the mission panel. The funnel plays step by step and the cloud follows
+   it: **18,598 tracked** → **286 flagged by the ML model** (all of them scored in well under a tenth of a second)
+   → **374 checked with physics** (the model's top 300 plus every object within 10 km of the station's altitude
+   band, a safety net) → **13 confirmed passes inside 25 km** (10 objects) → **0 inside the 5 km critical radius**.
+   A brute-force screen of all 6,754 objects in the station's ±50 km altitude band finds the same 13 passes but
+   takes about 7 s instead of 0.4 s (`backend/tests/test_real_full.py` checks this).
+2. The operator card recommends **stay on course**: the closest pass is SUPERVIEW-1 03 at 6.7 km, and its
+   probability is **UNVERIFIED** because public elements carry no covariance.
+3. **Run drill** injects one synthetic fragment, `DRILL-1 (injected test threat)`, built to pass 354 m from the
+   station 2.25 orbits later. It is badged DRILL in the panel and named in the disclaimers; **Reset** removes it.
+   The funnel runs again and raises an **operator alert**: **Plan avoidance maneuver** opens the usual candidates →
+   secondary screening → **Approve simulated maneuver** flow, or the operator stays on course. With the drill
+   injected at the window start, two of the three recommended burns create new sub-10 km passes with real
+   satellites and are refused by secondary screening; the third clears the drill to about 10 km and is approved.
+
+The shortlist is fixed for the session: screening, secondary checks and perception all use it, so a post-burn screen
+compares like with like. Vehicles docked to the station (Progress MS-34 shares its elements) are excluded from the
+post-burn screen because they move with it. `POST /api/data/refresh` (or `POST /api/scenarios/real-iss/reset?live=true`)
+downloads fresh elements when online; a live rebuild keeps the 400-object altitude-band subset, which is screened in
+full and has no funnel.
 
 ### Scenario C — the live sandbox
 
@@ -188,6 +207,8 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `GET /api/health` | Service status, agent mode, scenario list |
 | `GET /api/scenarios`, `GET /api/scenarios/{id}` | Scenario summaries / detail (window, data source, thresholds, simulation state) |
 | `POST /api/scenarios/{id}/reset?live=false` | Reset to the initial state (`live=true` rebuilds the real scenario from a fresh download) |
+| `GET /api/scenarios/{id}/catalog-tles` | Element rows for every catalogued object (the mission page's point cloud propagates them with SGP4) |
+| `POST /api/scenarios/{id}/drill` | Real scenario only: inject one labelled drill threat (`DRILL-1`) at `now` and re-screen; reset removes it |
 | `GET /api/objects?scenario_id=` | Catalog with provenance and uncertainty metadata |
 | `GET /api/objects/{id}?scenario_id=&at=` | Object detail with state (TEME, geodetic, osculating elements) at a time |
 | `GET /api/objects/{id}/trajectory?scenario_id=&start=&end=&step_s=&maneuver_id=&variant=` | Trajectory samples. The primary's default is its **committed** path (burns included, `burn_times_unix`, one segment per arc); `maneuver_id` previews a candidate on top of it; `variant=original` leaves the burns out. Samples before a spawned object existed are `null` |
@@ -197,7 +218,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `POST /api/conjunctions/{id}/maneuvers`, `GET …/maneuvers` | Plan candidates / fetch the existing plan |
 | `POST /api/maneuvers/{id}/secondary-check` | Secondary screening for a candidate |
 | `POST /api/agent/analyze` | Run the agent (`mode`: `auto` \| `gemini` \| `deterministic`) |
-| `GET /api/perception?scenario_id=&maneuver_id=&horizon_s=&critical_radius_km=&tracked_radius_km=&include_hidden=` | ML-ranked, physics-verified objects around the primary with tiers, RTN miss vectors and trails |
+| `GET /api/perception?scenario_id=&maneuver_id=&horizon_s=&critical_radius_km=&tracked_radius_km=&include_hidden=` | ML-ranked, physics-verified objects around the primary with tiers, RTN miss vectors and trails; `funnel` gives the counts and ids the mission page plays |
 | `GET /api/perception/model` | Loaded model, metrics, threshold and training provenance |
 | `GET /api/simulation/state` | Threat state, committed burns, decisions, the event log, the backend's last known clock |
 | `POST /api/simulation/approve`, `POST /api/simulation/reject` | Human decision: approve commits the burn into the trajectory (append-only in time), reject of the latest committed burn withdraws it |
@@ -217,7 +238,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 ├── README.md · .env.example
 ├── backend/
 │   ├── app/{api,schemas,data,physics,perception,agent,scenarios,simulation}/
-│   ├── scripts/build_real_fixture.py     # rebuilds data/scenarios/real_catalog.tle from downloaded groups
+│   ├── scripts/build_real_fixture.py     # rebuilds data/scenarios/real_catalog.tle (--full: real_catalog_full.tle.gz) from downloaded groups
 │   ├── scripts/train_perception_model.py # labels CelesTrak pairs with the physics screening and trains the ranker
 │   ├── scripts/enable_xgboost_macos.sh   # pip-only OpenMP fix for the xgboost wheel on macOS
 │   └── tests/                            # pytest suite (physics, API, agent)
@@ -225,7 +246,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 └── data/
     ├── cache/                            # downloaded CelesTrak groups (git-ignored)
     ├── models/perception_risk.*          # trained XGBoost + scikit-learn artifacts, metadata, training report
-    └── scenarios/real_catalog.{tle,meta.json}   # committed fixture + provenance
+    └── scenarios/real_catalog{.tle,_full.tle.gz}, *.meta.json   # committed fixtures (400-object subset, full catalog) + provenance
 ```
 
 ## Known limitations
@@ -233,7 +254,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Public GP elements have no covariance; real-data probabilities are `UNVERIFIED` unless the clearly labelled illustrative policy is chosen. The synthetic scenario's covariances are scenario definitions.
 * SGP4 accuracy degrades with age from each element epoch (km-level after a day); the committed fixture ages, and the real scenario's window is anchored at the ISS element epoch for that reason. Records older than 30 days are flagged `STALE`.
 * The numerical model is two-body + J2 only (no drag, no higher harmonics); the post-burn arc is therefore an approximation and the baseline model difference is reported rather than hidden.
-* Screening uses a 30 s coarse step; minima narrower than the step that sit next to another minimum could merge. The catalog is a hackathon-sized subset (400 objects near the ISS band), so secondary screening is explicitly `LIMITED` to it.
+* Screening uses a 30 s coarse step; minima narrower than the step that sit next to another minimum could merge. Secondary screening covers the scenario's catalog only and says so (`LIMITED`); on the full-catalog ISS scenario it covers the ML shortlist (the model's top 300 plus the 10 km altitude safety band), not all 18,598 objects. The shortlist matched a brute-force band screen on the 2026-10-17 snapshot; on other data the 10 km band is the safety net.
 * The planner is a deterministic grid search, not an optimiser; the delta-v budget is a proxy, and maneuver execution errors are not modelled.
 * No public conjunction-message feed (e.g. SOCRATES/CDMs) is integrated; all conjunctions come from the local screening.
 * Single-user in-memory sessions; restarting the backend clears screenings, plans, decisions, spawned junk and committed burns (the scenario definitions are deterministic and reload identically).

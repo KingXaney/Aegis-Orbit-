@@ -3,15 +3,20 @@
 Usage:
     python scripts/build_real_fixture.py --source-dir <dir with *.tle + retrieved_at.txt> \
         --output ../data/scenarios/real_catalog.tle [--primary 25544] [--margin-km 60] [--max-objects 400]
+    python scripts/build_real_fixture.py --source-dir <dir> --output ../data/scenarios/real_catalog_full.tle.gz --full
 
 The fixture keeps the primary plus every object whose perigee/apogee band
 (widened by the margin) overlaps the primary's band, capped at --max-objects
-closest in altitude. ISS modules tracked as separate catalog entries are
-excluded because they are the same physical object as the primary.
+closest in altitude. With --full it keeps every object instead (the catalog the
+perception model filters). ISS modules tracked as separate catalog entries are
+excluded because they are the same physical object as the primary. An output
+name ending in .gz is written gzipped; the metadata goes next to it as
+<name>.meta.json.
 """
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 from datetime import datetime, timezone
@@ -31,6 +36,7 @@ def main() -> None:
     ap.add_argument("--primary", type=int, default=25544)
     ap.add_argument("--margin-km", type=float, default=60.0)
     ap.add_argument("--max-objects", type=int, default=400)
+    ap.add_argument("--full", action="store_true", help="keep every object, not only the primary's altitude band")
     args = ap.parse_args()
 
     src = Path(args.source_dir)
@@ -53,17 +59,23 @@ def main() -> None:
         if o.name.strip() in ISS_MODULE_EXCLUSIONS or (o.name.startswith("ISS (") and norad != args.primary):
             excluded.append({"norad_id": norad, "name": o.name.strip(), "reason": "ISS module/co-located entry"})
             continue
-        if o.perigee_alt_km - args.margin_km <= p_hi and o.apogee_alt_km + args.margin_km >= p_lo:
+        if args.full or (o.perigee_alt_km - args.margin_km <= p_hi and o.apogee_alt_km + args.margin_km >= p_lo):
             center = 0.5 * (o.perigee_alt_km + o.apogee_alt_km)
             selected.append((abs(center - 0.5 * (p_lo + p_hi)), o, g))
     selected.sort(key=lambda t: (t[0], t[1].norad_id))
-    kept = selected[: args.max_objects - 1]
+    kept = selected if args.full else selected[: args.max_objects - 1]
     out_lines = []
     for o, g in [(primary, pgroup)] + [(o, g) for _, o, g in kept]:
         out_lines += [o.name.ljust(24), o.tle_line1, o.tle_line2]
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(out_lines) + "\n")
+    text = "\n".join(out_lines) + "\n"
+    if out.suffix == ".gz":
+        # mtime=0 keeps the bytes identical across rebuilds of the same data
+        out.write_bytes(gzip.compress(text.encode("utf-8"), mtime=0))
+    else:
+        out.write_text(text)
+    stem = out.name.removesuffix(".gz").removesuffix(".tle")
     meta = {
         "source": "CelesTrak GP data (https://celestrak.org/NORAD/elements/)",
         "groups": groups,
@@ -71,7 +83,7 @@ def main() -> None:
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "primary_norad_id": args.primary,
         "primary_name": primary.name.strip(),
-        "filter": {
+        "filter": {"rule": "none: every object in the groups (full catalog)", "full_catalog": True} if args.full else {
             "rule": "perigee/apogee band of the object, widened by margin_km, overlaps the primary's band",
             "margin_km": args.margin_km,
             "candidates_matching": len(selected),
@@ -84,7 +96,7 @@ def main() -> None:
         "note": "Mean elements fitted by the data provider; positions derived from them are SGP4 estimates, "
                 "not live telemetry. Accuracy degrades with age from each record's epoch.",
     }
-    out.with_suffix(".meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    (out.parent / f"{stem}.meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(f"wrote {out} with {meta['object_count']} objects ({len(selected)} matched, "
           f"{len(rejected)} rejected, {len(excluded)} excluded)")
 

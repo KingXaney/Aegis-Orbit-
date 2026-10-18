@@ -83,7 +83,8 @@ def test_plan_requires_screening(client):
 
 def test_real_scenario_is_honest_about_uncertainty(client):
     d = client.get(f"/api/scenarios/{real.SCENARIO_ID}").json()
-    assert d["kind"] == "real" and d["object_count"] == 400 and d["data_source"]["retrieved_at"]
+    assert d["kind"] == "real" and d["object_count"] == 18599 and d["data_source"]["retrieved_at"]
+    assert d["screening_shortlist"]["size"] < 600 and d["data_source"]["full_catalog"]
     scr = client.post("/api/conjunctions/screen", json={"scenario_id": real.SCENARIO_ID}).json()
     assert scr["stats"]["complete"]
     for c in scr["conjunctions"]:
@@ -105,6 +106,7 @@ def test_perception_endpoints(client):
     real_r = client.get("/api/perception", params={"scenario_id": real.SCENARIO_ID})
     assert real_r.status_code == 200
     rd = real_r.json()
-    assert rd["complete"] and rd["counts"]["CRITICAL"] == 0 and rd["counts"]["SEMI_CRITICAL"] == 12
+    # full catalog: 13 passes inside 25 km (10 objects), none inside the critical radius
+    assert rd["complete"] and rd["counts"]["CRITICAL"] == 0 and rd["counts"]["SEMI_CRITICAL"] == 13
     assert all(o["physics"]["pc"]["status"] == "UNVERIFIED" for o in rd["objects"] if o["tier"] == "SEMI_CRITICAL")
     assert client.get("/api/perception/model").status_code == 200
