@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # --- Agent -------------------------------------------------------------
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3.8-flash"
-    agent_mode: str = "auto"  # auto | gemini | deterministic
+    agent_mode: str = "gemini"  # gemini | deterministic | auto; the UI settings can override it per run
     agent_max_tool_calls: int = 16
 
     # --- Data --------------------------------------------------------------

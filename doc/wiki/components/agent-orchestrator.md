@@ -26,7 +26,8 @@ covers the mechanics.
 ## Provider selection
 
 Selection happens in [orchestrator.py:56-71](../../../backend/app/agent/orchestrator.py#L56-L71). The
-mode is `auto` by default, `gemini` or `deterministic`, from `AGENT_MODE` or the request.
+mode is `gemini` by default, or `deterministic` or `auto`, from `AGENT_MODE` or the request. The
+simulator's Settings panel sends the viewer's choice as the request `mode`.
 
 - **`auto`** uses Gemini when `GEMINI_API_KEY` is set and falls back otherwise, with a warning.
 - **`gemini`** without a key also falls back, with a warning.

@@ -6,7 +6,7 @@ SID = synthetic.SCENARIO_ID
 def test_health_and_scenarios(client):
     r = client.get("/api/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"
-    assert SID in r.json()["scenarios"]
+    assert SID in r.json()["scenarios"] and r.json()["gemini_model"]
     assert {s["scenario_id"] for s in client.get("/api/scenarios").json()} == {SID, real.SCENARIO_ID, synthetic.SANDBOX_SCENARIO_ID}
     d = client.get(f"/api/scenarios/{SID}").json()
     assert d["primary_id"] == synthetic.PRIMARY_ID and d["simulation"]["overall_threat_state"] == "NORMAL"
