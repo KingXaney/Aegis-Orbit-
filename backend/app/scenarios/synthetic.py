@@ -30,11 +30,12 @@ import numpy as np
 
 from ..data.catalog import Catalog, OrbitalObject
 from ..data.spacecraft import DEBRIS_FRAGMENT, KNOWN_DESIGNS_BY_NORAD, SpacecraftDesign
-from ..physics.frames import circular_state, osculating_elements, rtn_basis
+from ..physics.frames import circular_state, osculating_elements, rotate_about, rtn_basis
 from ..physics.propagation import MODEL_NUMERICAL, propagate_states
 from ..physics.time_utils import iso, to_unix
 
 SCENARIO_ID = "synthetic-conjunction"
+SANDBOX_SCENARIO_ID = "sandbox"  # the same primary and background objects, no staged pass: junk is spawned live
 T0 = datetime(2026, 10, 17, 0, 0, 0, tzinfo=timezone.utc)
 T0_UNIX = to_unix(T0)
 WINDOW_HOURS = 6.0
@@ -63,10 +64,7 @@ SECONDARY_DESIGN = SpacecraftDesign(
 )
 
 
-def _rotate_about(vec: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
-    axis = axis / np.linalg.norm(axis)
-    c, s = np.cos(angle_rad), np.sin(angle_rad)
-    return vec * c + np.cross(axis, vec) * s + axis * np.dot(axis, vec) * (1.0 - c)
+_rotate_about = rotate_about  # kept for readers of this module; the sandbox shares the helper
 
 
 def _numerical_object(object_id: str, name: str, category: str, r0: np.ndarray, v0: np.ndarray,
@@ -85,7 +83,7 @@ def _numerical_object(object_id: str, name: str, category: str, r0: np.ndarray, 
     )
 
 
-def build_synthetic_catalog() -> Catalog:
+def build_synthetic_catalog(include_debris: bool = True) -> Catalog:
     tca_unix = T0_UNIX + TCA_OFFSET_S
     # 1. primary at T0 and at TCA
     r_p0, v_p0 = circular_state(R_EARTH_KM + PRIMARY_ALT_KM, PRIMARY_INC_DEG, PRIMARY_RAAN_DEG, PRIMARY_ARG_LAT_DEG)
@@ -128,6 +126,13 @@ def build_synthetic_catalog() -> Catalog:
         background.append(_numerical_object(oid, name, cat, r, v, T0_UNIX, radius_m=radius,
                                             sigmas_rtn_m=None, position_basis="SYNTHETIC_STATE"))
 
+    if not include_debris:
+        return Catalog([primary] + background, source_info={
+            "kind": "sandbox", "scenario_id": SANDBOX_SCENARIO_ID, "epoch": iso(T0),
+            "note": "States are generated deterministically; no pass is staged. Junk spawned in the sandbox is "
+                    "defined at its designed closest approach and back-propagated with the same two-body + J2 "
+                    "model used for screening.",
+        })
     cat = Catalog([primary, secondary] + background, source_info={
         "kind": "synthetic", "scenario_id": SCENARIO_ID, "epoch": iso(T0),
         "designed_tca": iso(tca_unix), "designed_miss_km": float(np.hypot(MISS_HORIZONTAL_KM, MISS_RADIAL_KM)),
@@ -136,6 +141,10 @@ def build_synthetic_catalog() -> Catalog:
                 "back-propagated with the same two-body + J2 model used for screening.",
     })
     return cat
+
+
+def build_sandbox_catalog() -> Catalog:
+    return build_synthetic_catalog(include_debris=False)
 
 
 def scenario_window() -> Dict[str, float]:

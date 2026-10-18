@@ -44,6 +44,7 @@ class ScenarioDetail(BaseModel):
     disclaimers: List[str]
     thresholds: Dict[str, Any]
     simulation: "SimulationState"
+    sandbox: bool = False
 
 
 class SpacecraftDesignModel(BaseModel):
@@ -80,6 +81,11 @@ class ObjectSummary(BaseModel):
     design: SpacecraftDesignModel
     validation_status: str
     warnings: List[str] = []
+    base_model: Optional[str] = Field(default=None, description="native model once committed burns make it PIECEWISE_J2")
+    burns: List[Dict[str, Any]] = []
+    spawned_at: Optional[str] = None
+    spawned_at_unix: Optional[float] = None
+    spawn: Optional[Dict[str, Any]] = None
 
 
 class ObjectListResponse(BaseModel):
@@ -119,13 +125,16 @@ class TrajectoryResponse(BaseModel):
     end: str
     step_s: float
     times_unix: List[float]
-    positions_km: List[List[float]]
-    velocities_kms: List[List[float]]
+    # null samples: propagation failures, and the time before a spawned object existed
+    positions_km: List[List[Optional[float]]]
+    velocities_kms: List[List[Optional[float]]]
     status: str
     messages: List[str] = []
     segments: List[Dict[str, Any]] = []
     maneuver_id: Optional[str] = None
     burn_time: Optional[str] = None
+    burn_times_unix: List[float] = []
+    variant: str = Field(default="original", description="original | committed | candidate")
 
 
 class TrajectoryBatchRequest(BaseModel):
@@ -134,6 +143,7 @@ class TrajectoryBatchRequest(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
     step_s: float = Field(default=60.0, ge=1.0, le=3600.0)
+    variant: Optional[str] = None
 
 
 class TrajectoryBatchResponse(BaseModel):
@@ -239,6 +249,7 @@ class ManeuverModel(BaseModel):
     fuel_proxy: Dict[str, float]
     rank: Optional[int] = None
     secondary_check: Optional[Dict[str, Any]] = None
+    primary_version: Optional[int] = None
 
 
 class PlanResponse(BaseModel):
@@ -267,6 +278,10 @@ class SecondaryCheckResponse(BaseModel):
     changed_conjunctions: List[Dict[str, Any]]
     original_encounter: Dict[str, Any]
     worst_new_state: str
+    worst_changed_state: Optional[str] = None
+    window_end_unix: Optional[float] = None
+    catalog_version: Optional[int] = None
+    primary_version: Optional[int] = None
     complete: bool
     limitations: List[str]
     validation_status: str
@@ -316,6 +331,7 @@ class DecisionRecord(BaseModel):
     conjunction_id: Optional[str] = None
     at: str
     reason: Optional[str] = None
+    source: Optional[str] = None
     note: str
 
 
@@ -325,13 +341,109 @@ class SimulationState(BaseModel):
     screening_performed: bool
     active_conjunction_id: Optional[str] = None
     conjunction_count: int = 0
-    approved_maneuver_id: Optional[str] = None
+    approved_maneuver_id: Optional[str] = Field(default=None, description="the latest committed burn")
     approved_maneuver: Optional[Dict[str, Any]] = None
     post_approval: Optional[Dict[str, Any]] = None
     decisions: List[DecisionRecord] = []
     agent_run_count: int = 0
     reset_count: int = 0
+    autopilot: bool = False
+    sandbox: bool = False
+    committed_maneuvers: List[Dict[str, Any]] = []
+    burn_times_unix: List[float] = []
+    spawned_object_ids: List[str] = []
+    catalog_version: int = 0
+    primary_version: int = 0
+    clock: Optional[str] = Field(default=None, description="the latest simulation time a client sent")
+    clock_unix: Optional[float] = None
+    events: List[Dict[str, Any]] = []
+    event_seq: int = 0
+    last_evaluation: Optional[Dict[str, Any]] = None
     note: str
+
+
+class AutopilotRequest(BaseModel):
+    scenario_id: str
+    enabled: bool
+
+
+class SpawnRequest(BaseModel):
+    scenario_id: str
+    now: str = Field(description="simulation time of the spawn, ISO 8601 UTC")
+    kind: str = Field(description="fragment | rocket_body | dead_satellite")
+    time_to_tca_s: Optional[float] = Field(default=None, ge=0, description="closest approach this many seconds after now")
+    drop_point: Optional[Dict[str, float]] = Field(default=None, description="{lat_deg, lon_deg}: the pass happens over this spot")
+    offset_km: Optional[float] = Field(default=None, gt=0, le=100, description="explicit miss distance instead of the kind's band")
+    axis: str = Field(default="horizontal", description="horizontal | radial, where an explicit offset points")
+    crossing_angle_deg: Optional[float] = Field(default=None, ge=-179, le=179)
+    seed: Optional[int] = Field(default=None, ge=0)
+    name: Optional[str] = None
+
+
+class SpawnResponse(BaseModel):
+    object: ObjectSummary
+    designed: Dict[str, Any]
+    spawned_at: str
+    catalog_version: int
+    events: List[Dict[str, Any]] = []
+    simulation: SimulationState
+
+
+class SpawnRandomRequest(BaseModel):
+    scenario_id: str
+    now: str
+    count: int = Field(default=5, ge=1, le=20)
+    seed: Optional[int] = Field(default=None, ge=0)
+
+
+class SpawnBatchResponse(BaseModel):
+    objects: List[ObjectSummary]
+    designed: List[Dict[str, Any]]
+    seed: int
+    catalog_version: int
+    events: List[Dict[str, Any]] = []
+    simulation: SimulationState
+
+
+class RemoveRequest(BaseModel):
+    scenario_id: str
+    now: str
+    object_ids: Optional[List[str]] = Field(default=None, description="specific spawned objects to remove")
+    count: Optional[int] = Field(default=None, ge=1, le=25, description="or this many of the most recently spawned")
+
+
+class RemoveResponse(BaseModel):
+    removed: List[str]
+    events: List[Dict[str, Any]] = []
+    catalog_version: int
+    simulation: SimulationState
+
+
+class EvaluateRequest(BaseModel):
+    scenario_id: str
+    now: str
+    earliest_burn_after_s: Optional[float] = Field(default=None, ge=0, description="planning latency margin: no burn sooner than this")
+
+
+class EvaluateResponse(BaseModel):
+    scenario_id: str
+    now: str
+    now_unix: float
+    cached: bool = False
+    anchored: int = 0
+    screening: Dict[str, Any]
+    conjunctions: List[ConjunctionModel]
+    actions: List[Dict[str, Any]]
+    committed_maneuvers: List[Dict[str, Any]] = []
+    events_added: List[Dict[str, Any]] = []
+    simulation: SimulationState
+
+
+class JunkTypesResponse(BaseModel):
+    kinds: List[Dict[str, Any]]
+    min_time_to_tca_s: float
+    max_random_count: int
+    max_objects: int
 
 
 class ApproveRequest(BaseModel):

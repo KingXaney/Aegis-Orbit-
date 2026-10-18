@@ -29,6 +29,15 @@ def rtn_basis(r: np.ndarray, v: np.ndarray) -> np.ndarray:
     return np.column_stack([R, T, N])
 
 
+def rotate_about(vec: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rodrigues rotation of ``vec`` about ``axis`` by ``angle_rad``."""
+    vec = np.asarray(vec, dtype=float)
+    axis = np.asarray(axis, dtype=float)
+    axis = axis / np.linalg.norm(axis)
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return vec * c + np.cross(axis, vec) * s + axis * np.dot(axis, vec) * (1.0 - c)
+
+
 def rtn_to_inertial(vec_rtn: np.ndarray, r: np.ndarray, v: np.ndarray) -> np.ndarray:
     return rtn_basis(r, v) @ np.asarray(vec_rtn, dtype=float)
 

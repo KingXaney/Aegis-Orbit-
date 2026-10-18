@@ -57,4 +57,5 @@ def client():
     from app.simulation.session import get_store
 
     get_store().reset(synthetic.SCENARIO_ID)
+    get_store().reset(synthetic.SANDBOX_SCENARIO_ID)
     return TestClient(app)

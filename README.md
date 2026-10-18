@@ -21,7 +21,8 @@ environment.
 7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs.
 8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed.
 9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
-10. Requires explicit human approval before the simulated maneuver is applied.
+10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path.
+11. Offers a live **sandbox** (Scenario C): the clock runs open-ended, you drop space junk onto the orbit (three kinds with different pass distances), and an **autopilot** screens it, plans a burn that meets both the probability and the 5 km distance target, secondary-checks it and flies it, with the spacecraft's thrusters firing on the model when the burn happens.
 
 ## Stack
 
@@ -109,11 +110,11 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
-1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads on the **globe**, the camera following the spacecraft up close: the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. Press **Play** (or space). The camera follows the spacecraft from close enough to see its true-scale 3D model, riding its teal path band; drag to orbit around it and scroll out for orbit context (**Reset** returns to the default framing). Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.
+1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads on the **globe** in its **World** view: the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. Press **Play** (or space). In the World view the camera stays still in space while the Earth turns beneath the spacecraft's teal orbit band; drag to look around the Earth and scroll to zoom. **Follow** rides with the spacecraft from close enough to see its true-scale 3D model (drag to orbit around it, scroll out for orbit context), **World** returns to the overview, and **Reset** re-frames the current view. Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.
 2. Click **Screen conjunctions** (or go straight to **Analyze with agent**). The physics engine finds the designed close approach three hours into the window: miss distance ≈ 354 m, relative speed ≈ 8.2 km/s, Pc ≈ 5.7e-4 with the scenario's *illustrative* covariances → state **CRITICAL**. On the globe, the red marker, danger region and miss vector appear at the predicted TCA; the timeline shows a TCA tick and a countdown. Scrub toward the TCA to watch the debris close on the spacecraft.
 3. Click **Analyze with agent**. The agent calls `list_conjunctions → get_conjunction_details → plan_maneuvers → check_secondary ×3 → generate_report`; the tool execution history, validation checks and narrative appear in the panel. Three candidate burns are drawn in green; the recommended one is highlighted.
 4. Compare candidates in the table and chart (Δv, post-burn miss distance, post-burn Pc, target met, secondary screening status). Click a row or a green path to select it; **Jump to burn** moves the clock to the burn.
-5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision, and the state becomes **MITIGATED**. The teal path band continues along the maneuvered trajectory while the original stays dashed cyan for comparison. **Reject** restores the original. **Reset** returns the scenario to the identical initial state.
+5. Click **Approve simulated maneuver**. The backend validates the candidate (feasible, meets the target, secondary screening passed), records the decision and commits the burn into the spacecraft's trajectory: the teal band now bends at the burn, the path before it stays dashed cyan for one orbit for comparison, and in the **Follow** view the thrusters fire (a plume on the nozzle opposite to the Δv) when the clock reaches the burn; from the World view a flare marks it. Burns are append-only in time, so later passes are handled in order; the next critical pass is selected for you. **Withdraw** (in Human decision) takes the latest unfired burn back out. **Reset** returns the scenario to the identical initial state.
 
 ### Scenario A — real GP data
 
@@ -123,6 +124,33 @@ within 24 h). Because public elements carry no covariance, probabilities are rep
 and states are `MONITORING`/`UNVERIFIED`; the optional *illustrative covariance* re-screen is clearly labelled.
 Docked vehicles sharing the station's elements are excluded as co-orbital. Use `POST /api/data/refresh`
 (or `POST /api/scenarios/real-iss/reset?live=true`) to download fresh elements when online.
+
+### Scenario C — the live sandbox
+
+Open <http://localhost:5173/mission?scenario=sandbox> (or pick **C** in the scenario menu). The same synthetic
+GPM orbit with nothing staged, a clock that starts running on load and never ends (pause and speed only), and
+a **Space junk** tray:
+
+* The tray counts the debris in orbit. Choose how many pieces and press **Spawn**: a random mix of fragments
+  (pass inside the critical radius, 0.1–3 km), rocket bodies (3–10 km) and dead satellites (nearly co-orbital,
+  10–22 km) with closest approaches spread over the next two orbits, each at least half an hour away.
+  **Remove** takes the most recently spawned pieces out again. Each piece is built at its designed closest
+  approach and back-propagated, exactly like the scripted debris.
+* The **autopilot** (toggle in the mission panel) screens the next two orbits every few minutes of simulated
+  time, plans a burn for every pass inside the 5 km target with short leads and burns up to 5 m/s, rejects any
+  burn that would create a new close approach or push another known pass inside the target, commits the best
+  one and reports it in the event log. With the autopilot off, the planned burn waits in **Human decision**.
+  Passes the autopilot cannot clear in time are logged as unavoidable.
+* Around each dodge burn and each close pass the clock drops to 10× and then 1× (**Slow down for passes**),
+  the corner close-up shows the thruster plume and the delta-v arrow, and a **Dodge burn** card bottom right
+  explains the change of course: which nozzle fires, the delta-v, the pass before and after, and a diagram of
+  the velocity before and after the burn. From the World view a flare marks the burn on the orbit.
+* The corner close-up zooms (wheel, pinch or its + / − buttons) and orbits the spacecraft when dragged, so a
+  dodge can be watched from any angle; **⟲** puts it back on its default view, **Expand** fills the stage with
+  it, and shrinking it back to the corner resets the view too.
+* Junk within 30 km of the spacecraft is drawn enlarged so you can see it go by; its label gives the true size,
+  the distance and the enlargement. Once a pass is over, its markers go and the next threat is selected.
+* The session outlives the page: a reload resumes the clock where the backend last saw it, junk and burns included.
 
 ## Architecture
 
@@ -162,8 +190,8 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `POST /api/scenarios/{id}/reset?live=false` | Reset to the initial state (`live=true` rebuilds the real scenario from a fresh download) |
 | `GET /api/objects?scenario_id=` | Catalog with provenance and uncertainty metadata |
 | `GET /api/objects/{id}?scenario_id=&at=` | Object detail with state (TEME, geodetic, osculating elements) at a time |
-| `GET /api/objects/{id}/trajectory?scenario_id=&start=&end=&step_s=&maneuver_id=` | Trajectory samples; with `maneuver_id`, the post-burn arc from the burn time |
-| `POST /api/objects/trajectories` | Batch trajectories |
+| `GET /api/objects/{id}/trajectory?scenario_id=&start=&end=&step_s=&maneuver_id=&variant=` | Trajectory samples. The primary's default is its **committed** path (burns included, `burn_times_unix`, one segment per arc); `maneuver_id` previews a candidate on top of it; `variant=original` leaves the burns out. Samples before a spawned object existed are `null` |
+| `POST /api/objects/trajectories` | Batch trajectories (same rules) |
 | `POST /api/conjunctions/screen` | Screen the primary (`pc_policy`: `provided_only` \| `illustrative_default`) |
 | `GET /api/conjunctions?scenario_id=`, `GET /api/conjunctions/{id}` | Current screening results / full conjunction record |
 | `POST /api/conjunctions/{id}/maneuvers`, `GET …/maneuvers` | Plan candidates / fetch the existing plan |
@@ -171,8 +199,13 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `POST /api/agent/analyze` | Run the agent (`mode`: `auto` \| `gemini` \| `deterministic`) |
 | `GET /api/perception?scenario_id=&maneuver_id=&horizon_s=&critical_radius_km=&tracked_radius_km=&include_hidden=` | ML-ranked, physics-verified objects around the primary with tiers, RTN miss vectors and trails |
 | `GET /api/perception/model` | Loaded model, metrics, threshold and training provenance |
-| `GET /api/simulation/state` | Threat state, approvals, decisions |
-| `POST /api/simulation/approve`, `POST /api/simulation/reject` | Human decision on a simulated maneuver |
+| `GET /api/simulation/state` | Threat state, committed burns, decisions, the event log, the backend's last known clock |
+| `POST /api/simulation/approve`, `POST /api/simulation/reject` | Human decision: approve commits the burn into the trajectory (append-only in time), reject of the latest committed burn withdraws it |
+| `POST /api/simulation/autopilot` | Sandbox only: let the simulation commit avoidance burns itself |
+| `GET /api/sandbox/junk-types` | The junk kinds the sandbox can spawn, with their distance bands and designs |
+| `POST /api/sandbox/spawn`, `POST /api/sandbox/spawn_random` | Sandbox only: spawn one piece of junk whose closest approach follows the request (`kind`, `now`, `time_to_tca_s`, `drop_point`, `offset_km`, `seed`), or a random mix over the next two orbits |
+| `POST /api/sandbox/remove` | Sandbox only: take spawned junk away (`object_ids`, or the `count` most recently spawned); burns already committed for it stay in the trajectory |
+| `POST /api/sandbox/evaluate` | Sandbox only: screen from `now` over two orbits and let the autopilot plan, check and commit burns (cached when nothing changed) |
 | `POST /api/data/refresh` | Download fresh CelesTrak groups (network required) |
 | `GET /api/catalog` | Explorer catalog: every on-orbit object's TLE with SATCAT type, owner and launch date, plus orbit class |
 | `POST /api/catalog/refresh` | Rebuild the explorer catalog from CelesTrak (`GROUP=active`, `NAME=DEB`, `NAME=R/B`, SATCAT); at most once every 2 hours |
@@ -203,7 +236,8 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Screening uses a 30 s coarse step; minima narrower than the step that sit next to another minimum could merge. The catalog is a hackathon-sized subset (400 objects near the ISS band), so secondary screening is explicitly `LIMITED` to it.
 * The planner is a deterministic grid search, not an optimiser; the delta-v budget is a proxy, and maneuver execution errors are not modelled.
 * No public conjunction-message feed (e.g. SOCRATES/CDMs) is integrated; all conjunctions come from the local screening.
-* Single-user in-memory sessions; restarting the backend clears screenings, plans and decisions (the scenario definitions are deterministic and reload identically).
+* Single-user in-memory sessions; restarting the backend clears screenings, plans, decisions, spawned junk and committed burns (the scenario definitions are deterministic and reload identically).
+* The sandbox autopilot works with the same grid planner: with little warning only large burns (up to 5 m/s) clear the 5 km target, so a piece dropped minutes ahead costs far more Δv than a real operator would spend, or is reported as unavoidable. The backend has no clock of its own; the browser sends the simulation time with every sandbox call.
 * The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
 

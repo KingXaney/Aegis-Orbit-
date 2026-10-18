@@ -43,11 +43,11 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from ..config import Settings, get_settings
-from ..data.catalog import OrbitalObject
+from ..config import PlannerProfile, Settings, get_settings
+from ..data.catalog import OrbitalObject, Segment
 from .collision_probability import POLICY_PROVIDED_ONLY, PcResult, compute_pc
-from .frames import rtn_basis
-from .propagation import MODEL_NUMERICAL, propagate, propagate_states, state_at
+from .frames import osculating_elements, rtn_basis
+from .propagation import MODEL_PIECEWISE, original_of, propagate, propagate_states, state_at
 from .screening import Conjunction, anchor
 from .threat import evaluate_threat_state, meets_mitigation_target
 from .time_utils import iso
@@ -109,6 +109,7 @@ class ManeuverCandidate:
     fuel_proxy: Dict[str, float] = field(default_factory=dict)
     rank: Optional[int] = None
     secondary_check: Optional[Dict[str, Any]] = None
+    primary_version: Optional[int] = None  # the session's primary version this candidate was planned against
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -153,6 +154,7 @@ class ManeuverCandidate:
             "fuel_proxy": self.fuel_proxy,
             "rank": self.rank,
             "secondary_check": self.secondary_check,
+            "primary_version": self.primary_version,
         }
 
 
@@ -211,12 +213,16 @@ def plan_maneuvers(conj: Conjunction, primary: OrbitalObject, secondary: Orbital
                    settings: Optional[Settings] = None, pc_policy: str = POLICY_PROVIDED_ONLY,
                    max_candidates: int = 3, lead_orbits: Optional[Sequence[float]] = None,
                    dv_magnitudes_mps: Optional[Sequence[float]] = None,
-                   directions: Optional[Sequence[str]] = None) -> PlanResult:
+                   directions: Optional[Sequence[str]] = None, profile: Optional[PlannerProfile] = None) -> PlanResult:
     s = settings or get_settings()
+    prof = profile or s.default_profile()
     t_wall = _time.time()
-    leads = list(lead_orbits if lead_orbits is not None else s.planner_lead_orbit_list)
-    mags = list(dv_magnitudes_mps if dv_magnitudes_mps is not None else s.planner_dv_list)
-    dirs = [d for d in (directions if directions is not None else s.planner_direction_list) if d in DIRECTION_VECTORS]
+    leads = list(lead_orbits if lead_orbits is not None else prof.lead_orbits)
+    mags = list(dv_magnitudes_mps if dv_magnitudes_mps is not None else prof.dv_magnitudes_mps)
+    dirs = [d for d in (directions if directions is not None else prof.directions) if d in DIRECTION_VECTORS]
+    max_dv = prof.max_dv_mps
+    min_lead = prof.min_lead_time_s
+    require_distance = prof.require_distance_target
     step = s.planner_numerical_step_s
     period = primary.period_s or 5600.0
     earliest = max(window_start_unix, earliest_burn_unix if earliest_burn_unix is not None else window_start_unix)
@@ -229,15 +235,17 @@ def plan_maneuvers(conj: Conjunction, primary: OrbitalObject, secondary: Orbital
 
     candidates: List[ManeuverCandidate] = []
     baseline_rows: List[Dict[str, Any]] = []
-    short_sec = secondary.object_id.replace("NORAD-", "").replace("SYN-", "")
+    short_sec = secondary.object_id.replace("NORAD-", "").replace("SYN-", "").replace("SBX-", "")
+    # Ids carry the encounter time, so plans for different passes of the same object never collide.
+    id_prefix = f"MV-{short_sec}-{int(round(tca))}"
     n = 0
     for lead in leads:
         t_burn = tca - lead * period
         lead_reasons: List[str] = []
         if t_burn < earliest:
             lead_reasons.append(f"burn time {iso(t_burn)} is before the earliest allowed burn {iso(earliest)}")
-        if tca - t_burn < s.planner_min_lead_time_s:
-            lead_reasons.append(f"lead time {tca - t_burn:.0f} s is below the minimum {s.planner_min_lead_time_s:.0f} s")
+        if tca - t_burn < min_lead:
+            lead_reasons.append(f"lead time {tca - t_burn:.0f} s is below the minimum {min_lead:.0f} s")
         try:
             r_b, v_b = state_at(primary, t_burn, step)
         except ValueError as exc:
@@ -278,20 +286,23 @@ def plan_maneuvers(conj: Conjunction, primary: OrbitalObject, secondary: Orbital
                             policy=pc_policy,
                             extra_assumptions=["covariance assumed unchanged by the maneuver"])
             state, rationale = evaluate_threat_state(ref["miss_km"], pc, s)
-            meets, basis_txt = meets_mitigation_target(ref["miss_km"], pc, s)
+            meets, basis_txt = meets_mitigation_target(ref["miss_km"], pc, s, require_distance=require_distance)
             reasons = list(lead_reasons)
-            if m > s.planner_max_dv_mps:
-                reasons.append(f"delta-v {m:g} m/s exceeds budget {s.planner_max_dv_mps:g} m/s")
+            if m > max_dv:
+                reasons.append(f"delta-v {m:g} m/s exceeds budget {max_dv:g} m/s")
             feasible = not reasons
-            cost = m / s.planner_max_dv_mps
+            cost = m / max_dv
+            shortfall = max(0.0, (s.miss_distance_target_km - ref["miss_km"]) / s.miss_distance_target_km)
             if pc.status == "COMPUTED" and pc.value is not None:
                 risk = max(0.0, np.log10(max(pc.value, 1e-300) / s.pc_mitigation_target))
+                if require_distance:
+                    risk += shortfall
             else:
-                risk = max(0.0, (s.miss_distance_target_km - ref["miss_km"]) / s.miss_distance_target_km)
+                risk = shortfall
             penalty = 0.0 if feasible else 1000.0
             score = cost + risk + penalty
             candidates.append(ManeuverCandidate(
-                maneuver_id=f"MV-{short_sec}-{n:03d}", conjunction_id=conj.conjunction_id,
+                maneuver_id=f"{id_prefix}-{n:03d}", conjunction_id=conj.conjunction_id,
                 burn_time_unix=t_burn, lead_time_s=tca - t_burn, lead_orbits=lead, direction=d,
                 dv_rtn_mps=dv_rtn, dv_teme_mps=dv_teme, dv_magnitude_mps=m,
                 burn_r_km=r_b, burn_v_pre_kms=v_b, burn_v_post_kms=states0[k, 3:],
@@ -304,7 +315,7 @@ def plan_maneuvers(conj: Conjunction, primary: OrbitalObject, secondary: Orbital
                 meets_target=bool(meets), target_basis=basis_txt, feasible=feasible, feasibility_reasons=reasons,
                 validation_status="VALID" if feasible else "REJECTED", objective_score=float(score),
                 objective_terms={"dv_cost": cost, "risk_term": float(risk), "infeasible_penalty": penalty},
-                fuel_proxy={"dv_budget_mps": s.planner_max_dv_mps, "fraction_of_budget": float(m / s.planner_max_dv_mps)},
+                fuel_proxy={"dv_budget_mps": max_dv, "fraction_of_budget": float(m / max_dv)},
             ))
 
     candidates.sort(key=lambda c: (c.objective_score, -c.post_miss_distance_km, c.burn_time_unix))
@@ -314,8 +325,9 @@ def plan_maneuvers(conj: Conjunction, primary: OrbitalObject, secondary: Orbital
     stats = {"candidates_evaluated": len(candidates), "valid": sum(1 for c in candidates if c.feasible),
              "meeting_target": sum(1 for c in candidates if c.meets_target and c.feasible),
              "duration_s": round(_time.time() - t_wall, 3)}
-    config = {"lead_orbits": leads, "dv_magnitudes_mps": mags, "directions": dirs, "dv_budget_mps": s.planner_max_dv_mps,
-              "min_lead_time_s": s.planner_min_lead_time_s, "numerical_step_s": step, "pc_policy": pc_policy,
+    config = {"profile": prof.name, "lead_orbits": leads, "dv_magnitudes_mps": mags, "directions": dirs,
+              "dv_budget_mps": max_dv, "min_lead_time_s": min_lead, "require_distance_target": require_distance,
+              "numerical_step_s": step, "pc_policy": pc_policy,
               "earliest_burn": iso(earliest), "pc_mitigation_target": s.pc_mitigation_target,
               "miss_distance_target_km": s.miss_distance_target_km, "post_tca_search_half_width_s": search_half_width_s}
     return PlanResult(conj.conjunction_id, candidates, [c.maneuver_id for c in recommended], baseline_rows, config,
@@ -347,9 +359,68 @@ def _select_diverse(candidates: List[ManeuverCandidate], n: int) -> List[Maneuve
     return chosen
 
 
-def maneuvered_primary(primary: OrbitalObject, cand: ManeuverCandidate) -> OrbitalObject:
-    """The primary as a numerical object starting from the post-burn state."""
-    return replace(primary, propagation_model=MODEL_NUMERICAL, state_epoch_unix=float(cand.burn_time_unix),
-                   r0_teme_km=np.asarray(cand.burn_r_km, float).copy(),
-                   v0_teme_kms=np.asarray(cand.burn_v_post_kms, float).copy(),
-                   position_basis=f"POST_BURN_NUMERICAL ({cand.maneuver_id})", satrec=None)
+# --------------------------------------------------------------------------
+# Committing burns: the primary with its burn arcs (see propagation.MODEL_PIECEWISE)
+# --------------------------------------------------------------------------
+
+def burn_segment(primary: OrbitalObject, t_burn_unix: float, dv_rtn_mps, maneuver_id: str, direction: str = "",
+                 step_s: float = 10.0) -> Segment:
+    """A burn arc: the primary's state at the burn time plus an impulsive RTN delta-v (m/s)."""
+    r_b, v_b = state_at(primary, float(t_burn_unix), step_s)
+    dv = np.asarray(dv_rtn_mps, dtype=float)
+    dv_teme_kms = rtn_basis(r_b, v_b) @ dv / 1000.0
+    return Segment(t_start_unix=float(t_burn_unix), epoch_unix=float(t_burn_unix),
+                   r0_km=np.asarray(r_b, float).copy(), v0_kms=np.asarray(v_b, float) + dv_teme_kms,
+                   maneuver_id=maneuver_id, dv_mps=float(np.linalg.norm(dv)), direction=direction)
+
+
+def _orbit_summary(r_km: np.ndarray, v_kms: np.ndarray) -> Dict[str, float]:
+    el = osculating_elements(r_km, v_kms)
+    return {"perigee_alt_km": el["perigee_alt_km"], "apogee_alt_km": el["apogee_alt_km"], "period_s": el["period_s"],
+            "inclination_deg": el["inclination_deg"]}
+
+
+def with_segment(primary: OrbitalObject, seg: Segment) -> OrbitalObject:
+    """The primary with one more committed burn arc (a new object; the input is never mutated).
+
+    Burns are append-only in time: a burn earlier than the last committed one would invalidate the
+    arcs after it, so it is rejected and the caller has to re-plan from the committed path."""
+    if primary.segments and seg.t_start_unix <= primary.segments[-1].t_start_unix:
+        raise ValueError(f"burn at {iso(seg.t_start_unix)} is not after the last committed burn at "
+                         f"{iso(primary.segments[-1].t_start_unix)}")
+    first = primary.propagation_model != MODEL_PIECEWISE
+    ids = [s.maneuver_id for s in primary.segments] + [seg.maneuver_id]
+    base_summary = {"perigee_alt_km": primary.perigee_alt_km, "apogee_alt_km": primary.apogee_alt_km,
+                    "period_s": primary.period_s, "inclination_deg": primary.inclination_deg}
+    return replace(primary, propagation_model=MODEL_PIECEWISE,
+                   base_model=primary.propagation_model if first else primary.base_model,
+                   base_position_basis=primary.position_basis if first else primary.base_position_basis,
+                   base_summary=base_summary if first else primary.base_summary,
+                   segments=primary.segments + (seg,),
+                   position_basis=f"POST_BURN_NUMERICAL ({'; '.join(ids)})",
+                   warnings=list(primary.warnings), **_orbit_summary(seg.r0_km, seg.v0_kms))
+
+
+def with_burn(primary: OrbitalObject, cand: ManeuverCandidate) -> OrbitalObject:
+    """The primary with the candidate's burn committed (its post-burn state starts a new arc)."""
+    seg = Segment(t_start_unix=float(cand.burn_time_unix), epoch_unix=float(cand.burn_time_unix),
+                  r0_km=np.asarray(cand.burn_r_km, float).copy(), v0_kms=np.asarray(cand.burn_v_post_kms, float).copy(),
+                  maneuver_id=cand.maneuver_id, dv_mps=float(cand.dv_magnitude_mps), direction=cand.direction)
+    return with_segment(primary, seg)
+
+
+def without_last_burn(primary: OrbitalObject) -> OrbitalObject:
+    """The primary with its last committed burn removed (the original object once none remain)."""
+    if not primary.segments:
+        return primary
+    segments = primary.segments[:-1]
+    if not segments:
+        return original_of(primary)
+    last = segments[-1]
+    ids = [s.maneuver_id for s in segments]
+    return replace(primary, segments=segments, position_basis=f"POST_BURN_NUMERICAL ({'; '.join(ids)})",
+                   warnings=list(primary.warnings), **_orbit_summary(last.r0_km, last.v0_kms))
+
+
+# Older name, kept for callers that preview a candidate on top of the current primary.
+maneuvered_primary = with_burn

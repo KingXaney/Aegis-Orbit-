@@ -13,10 +13,12 @@ export interface HealthResponse {
   disclaimer: string;
 }
 
+export type ScenarioKind = 'real' | 'synthetic' | 'sandbox';
+
 export interface ScenarioSummary {
   scenario_id: string;
   name: string;
-  kind: 'real' | 'synthetic';
+  kind: ScenarioKind;
 }
 
 export interface Window {
@@ -28,12 +30,57 @@ export interface Window {
 
 export interface DecisionRecord {
   decision_id: string;
-  type: 'APPROVED' | 'REJECTED';
+  type: 'APPROVED' | 'REJECTED' | 'AUTOPILOT_COMMITTED';
   maneuver_id: string;
   conjunction_id: string | null;
   at: string;
   reason: string | null;
+  source?: 'human' | 'autopilot' | null;
   note: string;
+}
+
+/** A burn that is part of the primary's trajectory (approved by a human or committed by the autopilot). */
+export interface CommittedManeuver extends Maneuver {
+  source: 'human' | 'autopilot';
+  committed_at: string;
+  committed_at_sim: string | null;
+  committed_at_sim_unix: number | null;
+  secondary_check_status: string | null;
+  /** The burn time has passed at the backend's last known clock. */
+  fired: boolean;
+}
+
+export type SimulationEventKind =
+  | 'COMMITTED'
+  | 'UNCOMMITTED'
+  | 'AUTOPILOT'
+  | 'SPAWNED'
+  | 'CLOSEST_APPROACH'
+  | 'AWAITING_APPROVAL'
+  | 'UNAVOIDABLE'
+  | 'ANCHORED';
+
+export interface SimulationEvent {
+  seq: number;
+  kind: SimulationEventKind | string;
+  message: string;
+  /** Simulation time of the event (null when it has no simulation time). */
+  at: string | null;
+  at_unix: number | null;
+  /** Wall-clock time the backend recorded it. */
+  wall: string;
+  object_id?: string;
+  conjunction_id?: string;
+  maneuver_id?: string;
+  secondary_id?: string | null;
+  tca_unix?: number;
+  miss_km?: number;
+  post_miss_km?: number;
+  burn_time_unix?: number;
+  threat_state?: ThreatState;
+  reason?: string;
+  source?: string;
+  junk_kind?: JunkKind;
 }
 
 export interface PostApproval {
@@ -63,13 +110,26 @@ export interface SimulationState {
   decisions: DecisionRecord[];
   agent_run_count: number;
   reset_count: number;
+  /** Sandbox: the simulation commits avoidance burns itself. */
+  autopilot: boolean;
+  sandbox: boolean;
+  committed_maneuvers: CommittedManeuver[];
+  burn_times_unix: number[];
+  spawned_object_ids: string[];
+  catalog_version: number;
+  primary_version: number;
+  /** The latest simulation time the backend was told about (ISO), null before any. */
+  clock: string | null;
+  clock_unix: number | null;
+  events: SimulationEvent[];
+  event_seq: number;
   note: string;
 }
 
 export interface ScenarioDetail {
   scenario_id: string;
   name: string;
-  kind: 'real' | 'synthetic';
+  kind: ScenarioKind;
   description: string;
   primary_id: string;
   window: Window;
@@ -82,6 +142,7 @@ export interface ScenarioDetail {
   disclaimers: string[];
   thresholds: Record<string, unknown>;
   simulation: SimulationState;
+  sandbox: boolean;
 }
 
 /** Envelope in the local orbital frame: length in-track, width cross-track, height radial (metres). */
@@ -119,6 +180,13 @@ export interface ObjectSummary {
   design: SpacecraftDesign;
   validation_status: string;
   warnings: string[];
+  /** Native model once committed burns make the object PIECEWISE_J2. */
+  base_model?: string | null;
+  burns?: { maneuver_id: string; burn_time: string; burn_time_unix: number; dv_mps: number; direction: string }[];
+  /** Sandbox junk: when it was spawned (simulation time). */
+  spawned_at?: string | null;
+  spawned_at_unix?: number | null;
+  spawn?: (Record<string, unknown> & { kind?: JunkKind; tca_unix?: number; miss_km?: number; band_km?: number[] }) | null;
 }
 
 export interface StateAtTime {
@@ -144,6 +212,7 @@ export interface TrajectorySegment {
   end: string;
   model: string;
   label: string;
+  maneuver_id?: string | null;
 }
 
 export interface Trajectory {
@@ -165,6 +234,9 @@ export interface Trajectory {
   segments: TrajectorySegment[];
   maneuver_id: string | null;
   burn_time: string | null;
+  /** Committed (or previewed) burns along this path. */
+  burn_times_unix?: number[];
+  variant?: 'original' | 'committed' | 'candidate';
 }
 
 export interface PcResult {
@@ -271,6 +343,8 @@ export interface Maneuver {
   fuel_proxy: { dv_budget_mps: number; fraction_of_budget: number };
   rank: number | null;
   secondary_check: SecondaryCheckSummary | null;
+  /** The primary's version the candidate was planned against; a committed burn bumps it. */
+  primary_version?: number | null;
 }
 
 export interface PlanResponse {
@@ -402,6 +476,95 @@ export interface DecisionResponse {
   decision: DecisionRecord;
   maneuver: Maneuver | null;
   secondary_check: SecondaryCheckResponse | null;
+  simulation: SimulationState;
+}
+
+// ---------------------------------------------------------------- sandbox
+
+export type JunkKind = 'fragment' | 'rocket_body' | 'dead_satellite';
+
+export interface JunkTypeInfo {
+  kind: JunkKind;
+  category: string;
+  label: string;
+  blurb: string;
+  band_km: [number, number];
+  crossing_deg: [number, number];
+  radius_m: number;
+  relative_speed_kms: [number, number];
+  design: SpacecraftDesign;
+}
+
+export interface JunkTypesResponse {
+  kinds: JunkTypeInfo[];
+  min_time_to_tca_s: number;
+  max_random_count: number;
+  max_objects: number;
+}
+
+export interface DesignedEncounter {
+  kind: JunkKind;
+  tca: string;
+  tca_unix: number;
+  time_to_tca_s: number;
+  miss_km: number;
+  miss_horizontal_km: number;
+  miss_radial_km: number;
+  crossing_angle_deg: number;
+  relative_speed_kms: number;
+  speed_factor: number;
+  seed: number;
+  band_km: [number, number];
+}
+
+export interface SpawnResponse {
+  object: ObjectSummary;
+  designed: DesignedEncounter;
+  spawned_at: string;
+  catalog_version: number;
+  events: SimulationEvent[];
+  simulation: SimulationState;
+}
+
+export interface SpawnBatchResponse {
+  objects: ObjectSummary[];
+  designed: DesignedEncounter[];
+  seed: number;
+  catalog_version: number;
+  events: SimulationEvent[];
+  simulation: SimulationState;
+}
+
+export type EvaluateOutcome = 'COMMITTED' | 'AWAITING_APPROVAL' | 'MITIGATED' | 'UNAVOIDABLE' | 'DEFERRED';
+
+export interface EvaluateAction {
+  conjunction_id: string;
+  secondary_id: string;
+  tca: string;
+  tca_unix: number;
+  miss_km: number;
+  threat_state: ThreatState;
+  outcome: EvaluateOutcome;
+  maneuver_id: string | null;
+  post_miss_km: number | null;
+  reason: string | null;
+  burn_time?: string;
+  burn_time_unix?: number;
+  direction?: string;
+  dv_mps?: number;
+}
+
+export interface EvaluateResponse {
+  scenario_id: string;
+  now: string;
+  now_unix: number;
+  cached: boolean;
+  anchored: number;
+  screening: { start: string; end: string; conjunctions_found: number; stats: Record<string, unknown> };
+  conjunctions: Conjunction[];
+  actions: EvaluateAction[];
+  committed_maneuvers: CommittedManeuver[];
+  events_added: SimulationEvent[];
   simulation: SimulationState;
 }
 

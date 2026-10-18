@@ -23,7 +23,7 @@ from ..data.catalog import OrbitalObject
 from ..physics import collision_probability as cp
 from ..physics import maneuver_planner as mp
 from ..physics.frames import relative_positions_rtn, relative_state_rtn
-from ..physics.propagation import propagate
+from ..physics.propagation import MODEL_NUMERICAL, burn_times, original_of, propagate
 from ..physics.screening import Conjunction, altitude_overlap_filter, anchor, screen
 from ..physics.threat import evaluate_threat_state, thresholds_summary
 from ..physics.time_utils import iso
@@ -32,6 +32,7 @@ from .model import RiskModel, load_risk_model
 
 TIER_ORDER = ["CRITICAL", "SEMI_CRITICAL", "ML_WATCH", "HIDDEN"]
 MATCH_WINDOW_S = 600.0
+MAX_CACHE_ENTRIES = 16
 MODE_FULL, MODE_ML = "FULL_PHYSICS", "ML_PRIORITISED"
 DISCLAIMER = ("Model scores are estimates from a classifier trained on CelesTrak-derived screening labels; every "
               "distance and time shown is computed by the physics screening. Simulation only.")
@@ -55,41 +56,65 @@ def critical_tier(c: Conjunction, critical_km: float) -> bool:
     return c.miss_distance_km < critical_km
 
 
-def resolve_primary_variant(sess, maneuver_id: Optional[str], start_unix: float, end_unix: float, baseline: bool = False):
-    """(kind, candidate, segments[(primary_object, t_start, t_end)]) for the trajectory to perceive along.
+def _arcs(pobj: OrbitalObject, t0: float, t1: float) -> List[Dict[str, Any]]:
+    """The model arcs of the perceived trajectory inside [t0, t1]: native, then one per committed burn."""
+    burns = burn_times(pobj)
+    base_model = pobj.base_model or pobj.propagation_model
+    base_basis = pobj.base_position_basis or pobj.position_basis
+    if not burns:
+        return [{"start": iso(t0), "end": iso(t1), "model": base_model, "basis": base_basis, "maneuver_id": None}]
+    out: List[Dict[str, Any]] = []
+    if t0 < burns[0]:
+        out.append({"start": iso(t0), "end": iso(min(burns[0], t1)), "model": base_model, "basis": base_basis,
+                    "maneuver_id": None})
+    for k, tb in enumerate(burns):
+        start = max(tb, t0)
+        end = min(burns[k + 1] if k + 1 < len(burns) else t1, t1)
+        if start > t1 or start > end:
+            continue
+        out.append({"start": iso(start), "end": iso(end), "model": MODEL_NUMERICAL, "basis": pobj.position_basis,
+                    "maneuver_id": pobj.segments[k].maneuver_id})
+    return out
 
-    ``baseline=True`` forces the original (un-maneuvered) trajectory even when a maneuver is approved,
-    so a client can compare the two."""
+
+def resolve_primary_variant(sess, maneuver_id: Optional[str], start_unix: float, end_unix: float, baseline: bool = False):
+    """(kind, candidate, primary object to perceive along, arcs) for the trajectory to perceive along.
+
+    The default is the catalog primary, which carries every committed burn (kind APPROVED once a burn
+    is committed). ``maneuver_id`` previews a candidate on top of it (kind CANDIDATE) or, when that
+    burn is already committed, the committed path. ``baseline=True`` forces the original
+    (un-maneuvered) trajectory so a client can compare the two."""
     scen = sess.scenario
     primary = scen.catalog.require(scen.primary_id)
     cand = None
-    kind = "ORIGINAL"
     if baseline:
-        return kind, None, [(primary, start_unix, end_unix)]
-    if maneuver_id:
+        pobj, kind = original_of(primary), "ORIGINAL"
+    elif maneuver_id:
         cand = sess.maneuvers.get(maneuver_id)
         if cand is None:
             raise KeyError(f"maneuver '{maneuver_id}' not found in this session")
-        kind = "APPROVED" if sess.approved_maneuver_id == maneuver_id else "CANDIDATE"
-    elif sess.approved_maneuver_id and sess.approved_maneuver_id in sess.maneuvers:
-        cand = sess.maneuvers[sess.approved_maneuver_id]
-        kind = "APPROVED"
-    if cand is None:
-        return kind, None, [(primary, start_unix, end_unix)]
-    tb = float(cand.burn_time_unix)
-    segments = []
-    if tb > start_unix:
-        segments.append((primary, start_unix, min(tb, end_unix)))
-    if tb < end_unix:
-        segments.append((mp.maneuvered_primary(primary, cand), max(tb, start_unix), end_unix))
-    return kind, cand, segments
+        if sess.is_committed(maneuver_id):
+            pobj, kind = primary, "APPROVED"
+        else:
+            try:
+                pobj = mp.with_burn(primary, cand)
+            except ValueError as exc:
+                raise ValueError(f"candidate {maneuver_id} cannot be previewed on the current trajectory: {exc}") from exc
+            kind = "CANDIDATE"
+    else:
+        pobj = primary
+        kind = "APPROVED" if primary.segments else "ORIGINAL"
+        if primary.segments and sess.committed:
+            cand = sess.committed[-1].candidate
+    return kind, cand, pobj, _arcs(pobj, start_unix, end_unix)
 
 
-def horizon_for(scen, primary: OrbitalObject, requested_s: Optional[float], settings: Settings) -> Dict[str, Any]:
+def horizon_for(scen, primary: OrbitalObject, requested_s: Optional[float], settings: Settings,
+                start_unix: Optional[float] = None) -> Dict[str, Any]:
     period = primary.period_s or 5600.0
     window = scen.end_unix - scen.start_unix
     horizon = max(float(requested_s) if requested_s else window, settings.perception_min_horizon_orbits * period)
-    start = scen.start_unix
+    start = float(start_unix) if start_unix is not None else scen.start_unix
     end = start + horizon
     return {"start": iso(start), "end": iso(end), "start_unix": start, "end_unix": end, "horizon_s": horizon,
             "min_horizon_orbits": settings.perception_min_horizon_orbits, "primary_period_s": period,
@@ -129,54 +154,24 @@ def _select_physics_set(primary: OrbitalObject, objects: List[OrbitalObject], sc
                              f"the primary's altitude band ({len(subset)} screened)"]
 
 
-def _screen_segments(segments, objects, tracked_km: float, settings: Settings, pc_policy: str, catalog, full: bool):
+def _screen_variant(pobj: OrbitalObject, t0: float, t1: float, objects, tracked_km: float, settings: Settings,
+                    pc_policy: str, catalog, full: bool):
+    """One screening over the horizon; the piecewise primary handles its burn arcs itself, so a pass
+    near a burn is found once. Each conjunction is labelled by the arc its closest approach falls in."""
+    res = screen(pobj, objects, t0, t1, screening_radius_km=tracked_km, coarse_step_s=settings.screening_coarse_step_s,
+                 altitude_margin_km=settings.altitude_filter_margin_km,
+                 co_orbital_min_speed_kms=settings.co_orbital_min_relative_speed_kms,
+                 numerical_step_s=settings.planner_numerical_step_s, apply_altitude_filter=full)
+    burns = burn_times(pobj)
     found: List[Tuple[Conjunction, OrbitalObject, str]] = []
-    stats = []
-    co_orbital: List[Dict[str, Any]] = []
-    failures: List[Dict[str, Any]] = []
-    coarse: Dict[str, Tuple[float, float]] = {}
-    complete = True
-    pad = 2.0 * settings.screening_coarse_step_s  # overlap so a minimum at the burn boundary is interior to one segment
-    nominal = list(segments)
-    for seg_index, (pobj, t0, t1) in enumerate(segments):
-        if t1 - t0 < settings.screening_coarse_step_s:
-            continue
-        s0, s1 = t0, t1
-        if len(segments) > 1 and seg_index == 0:
-            s1 = t1 + pad
-        if len(segments) > 1 and seg_index == len(segments) - 1:
-            s0 = t0 - pad
-        res = screen(pobj, objects, s0, s1, screening_radius_km=tracked_km, coarse_step_s=settings.screening_coarse_step_s,
-                     altitude_margin_km=settings.altitude_filter_margin_km,
-                     co_orbital_min_speed_kms=settings.co_orbital_min_relative_speed_kms,
-                     numerical_step_s=settings.planner_numerical_step_s, apply_altitude_filter=full)
-        label = "pre-burn" if len(segments) > 1 and seg_index == 0 else ("post-burn" if len(segments) > 1 else "original")
-        for c in res.conjunctions:
-            sec = catalog.require(c.secondary_id)
-            c.pc = cp.compute_pc_for_conjunction(c, pobj, sec, pc_policy)
-            c.threat_state, c.threat_rationale = evaluate_threat_state(c.miss_distance_km, c.pc, settings)
-            found.append((c, pobj, label))
-        for oid, (d, t) in res.coarse_minima.items():
-            if oid not in coarse or d < coarse[oid][0]:
-                coarse[oid] = (d, t)
-        stats.append({"segment": label, **res.stats})
-        co_orbital.extend(res.co_orbital)
-        failures.extend(res.propagation_failures)
-        complete = complete and res.stats["complete"]
-    if len(nominal) > 1:
-        # keep each encounter once: the detection whose TCA lies inside its own segment's nominal range wins
-        kept: List[Tuple[Conjunction, OrbitalObject, str]] = []
-        for c, pobj, label in found:
-            seg = next((n for n in nominal if n[0] is pobj), None)
-            inside = seg is not None and seg[1] - 1e-6 <= c.tca_unix <= seg[2] + 1e-6
-            dup = next((i for i, (k, _, _) in enumerate(kept) if k.secondary_id == c.secondary_id
-                        and abs(k.tca_unix - c.tca_unix) <= pad), None)
-            if dup is None:
-                kept.append((c, pobj, label))
-            elif inside:
-                kept[dup] = (c, pobj, label)
-        found = kept
-    return found, stats, co_orbital, failures, coarse, complete
+    for c in res.conjunctions:
+        sec = catalog.require(c.secondary_id)
+        c.pc = cp.compute_pc_for_conjunction(c, pobj, sec, pc_policy)
+        c.threat_state, c.threat_rationale = evaluate_threat_state(c.miss_distance_km, c.pc, settings)
+        label = "original" if not burns else ("post-burn" if c.tca_unix >= burns[0] else "pre-burn")
+        found.append((c, pobj, label))
+    return (found, [{"segment": "horizon", **res.stats}], res.co_orbital, res.propagation_failures,
+            res.coarse_minima, res.stats["complete"])
 
 
 def _link(c: Conjunction, sess) -> Tuple[Optional[str], Optional[str]]:
@@ -214,7 +209,7 @@ def _trail(pobj: OrbitalObject, sec: OrbitalObject, center: float, half_width_s:
 def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Optional[float] = None,
              tracked_radius_km: Optional[float] = None, maneuver_id: Optional[str] = None, include_hidden: bool = False,
              trails: bool = True, settings: Optional[Settings] = None, model: Optional[RiskModel] = None,
-             baseline: bool = False) -> Dict[str, Any]:
+             baseline: bool = False, start_unix: Optional[float] = None) -> Dict[str, Any]:
     settings = settings or get_settings()
     scen = sess.scenario
     catalog = scen.catalog
@@ -223,28 +218,29 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
     tracked = float(tracked_radius_km or settings.screening_radius_km)
     if critical > tracked:
         raise ValueError(f"critical radius {critical:g} km must not exceed the tracked radius {tracked:g} km")
-    hz = horizon_for(scen, primary, horizon_s, settings)
-    kind, cand, segments = resolve_primary_variant(sess, maneuver_id, hz["start_unix"], hz["end_unix"], baseline=baseline)
+    hz = horizon_for(scen, primary, horizon_s, settings, start_unix=start_unix)
+    kind, cand, pobj, arcs = resolve_primary_variant(sess, maneuver_id, hz["start_unix"], hz["end_unix"], baseline=baseline)
     model = model or load_risk_model(settings.perception_model_meta_file)
     watch_thr = settings.perception_ml_watch_threshold
     if watch_thr is None and model.info.status == "LOADED":
         watch_thr = model.info.threshold if model.info.threshold is not None else 0.5
     pc_policy = sess.screening_pc_policy or scen.pc_policy
     key = (kind, cand.maneuver_id if cand else None, baseline, round(hz["horizon_s"], 3), critical, tracked, watch_thr,
-           include_hidden, trails, model.info.model_version, model.info.library, pc_policy)
+           include_hidden, trails, model.info.model_version, model.info.library, pc_policy,
+           catalog.version, sess.primary_version, int(round(hz["start_unix"] / 60.0)))
     cached = sess.perception_cache.get(key)
     if cached is not None:
         return {**cached, "cached": True}
 
     t_wall = time.time()
     objects = [o for o in catalog.others(primary.object_id) if o.validation_status != "INVALID"]
-    scores, elements_basis, ml_note, score_s = _score(model, primary, objects, hz["start_unix"])
-    physics_set, mode, limitations = _select_physics_set(primary, objects, scores, settings)
+    scores, elements_basis, ml_note, score_s = _score(model, pobj, objects, hz["start_unix"])
+    physics_set, mode, limitations = _select_physics_set(pobj, objects, scores, settings)
     t_scr = time.time()
-    found, seg_stats, co_orbital, failures, coarse, complete = _screen_segments(
-        segments, physics_set, tracked, settings, pc_policy, catalog, full=(mode == MODE_FULL))
+    found, seg_stats, co_orbital, failures, coarse, complete = _screen_variant(
+        pobj, hz["start_unix"], hz["end_unix"], physics_set, tracked, settings, pc_policy, catalog, full=(mode == MODE_FULL))
     screen_s = time.time() - t_scr
-    if hz["extends_past_window"]:
+    if hz["extends_past_window"] and start_unix is None:
         limitations.append("horizon extends past the scenario window; the UI holds trajectories only up to the window end")
     if not complete:
         limitations.append("some objects could not be propagated; their status is PROPAGATION_FAILED")
@@ -276,7 +272,7 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
         physics = {
             "status": "CONJUNCTION", "verified": True, "conjunction_id": c.conjunction_id,
             "linked_conjunction_id": linked, "link_basis": link_basis,
-            "tca": iso(c.tca_unix), "tca_unix": float(c.tca_unix), "time_to_tca_s": float(c.tca_unix - scen.start_unix),
+            "tca": iso(c.tca_unix), "tca_unix": float(c.tca_unix), "time_to_tca_s": float(c.tca_unix - hz["start_unix"]),
             "miss_distance_km": float(c.miss_distance_km), "relative_speed_kms": float(c.relative_speed_kms),
             "miss_vector_rtn_km": [float(x) for x in rel_r], "relative_velocity_rtn_kms": [float(x) for x in rel_v],
             "relative_position_teme_km": [float(x) for x in c.relative_position_teme_km],
@@ -319,7 +315,7 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
                    "relative_position_teme_km": None, "threat_state": "NORMAL" if verified else None,
                    "threat_rationale": [], "pc": None,
                    "coarse_min_distance_km": float(cm[0]) if cm else None, "coarse_min_at": iso(cm[1]) if cm else None,
-                   "models": {"primary": primary.propagation_model, "secondary": o.propagation_model}, "segment": None}
+                   "models": {"primary": pobj.propagation_model, "secondary": o.propagation_model}, "segment": None}
         entry = {"object_id": o.object_id, "name": o.name, "category": o.category, "tier": "ML_WATCH",
                  "ml": ml_block(o.object_id), "physics": physics, "trail": None}
         if sc is not None and watch_thr is not None and sc >= watch_thr:
@@ -353,8 +349,7 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
         "scenario_id": sess.scenario_id, "primary_id": primary.object_id,
         "primary_variant": {"kind": kind, "maneuver_id": cand.maneuver_id if cand else None,
                             "burn_time": iso(cand.burn_time_unix) if cand else None,
-                            "segments": [{"start": iso(t0), "end": iso(t1), "model": p.propagation_model, "basis": p.position_basis}
-                                         for p, t0, t1 in segments]},
+                            "burn_times_unix": burn_times(pobj), "segments": arcs},
         "horizon": hz, "thresholds": thresholds, "tier_rules": tier_rules(critical, tracked, watch_thr),
         "screening_mode": mode, "objects": entries, "counts": counts, "model": model.info.to_dict(),
         "stats": {"duration_s": round(time.time() - t_wall, 3), "score_duration_s": round(score_s, 4),
@@ -363,4 +358,6 @@ def perceive(sess, horizon_s: Optional[float] = None, critical_radius_km: Option
         "limitations": limitations, "disclaimer": DISCLAIMER, "cached": False,
     }
     sess.perception_cache[key] = result
+    while len(sess.perception_cache) > MAX_CACHE_ENTRIES:
+        sess.perception_cache.pop(next(iter(sess.perception_cache)))
     return result

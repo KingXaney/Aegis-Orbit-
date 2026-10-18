@@ -13,7 +13,7 @@ from . import real, synthetic
 class Scenario:
     scenario_id: str
     name: str
-    kind: str  # real | synthetic
+    kind: str  # real | synthetic | sandbox
     description: str
     primary_id: str
     catalog: Catalog
@@ -40,6 +40,7 @@ class Scenario:
             "data_source": self.catalog.source_info,
             "rejected_records": len(self.catalog.rejected),
             "disclaimers": list(self.disclaimers),
+            "sandbox": self.kind == "sandbox",
         }
 
 
@@ -56,7 +57,7 @@ def build_synthetic() -> Scenario:
         scenario_id=synthetic.SCENARIO_ID,
         name="Scripted conjunction (synthetic)",
         kind="synthetic",
-        description="Deterministic demonstration: a synthetic primary on a 420 km orbit meets a debris object on a "
+        description="Deterministic demonstration: a synthetic primary on a 407 km, 65° orbit meets a debris object on a "
                     "crossing orbit three hours into the window. All states are generated, not observed.",
         primary_id=synthetic.PRIMARY_ID,
         catalog=cat,
@@ -67,6 +68,28 @@ def build_synthetic() -> Scenario:
             "Covariances in this scenario are illustrative scenario definitions, not measured uncertainties.",
         ],
         highlight_object_ids=[synthetic.SECONDARY_ID],
+    )
+
+
+def build_sandbox() -> Scenario:
+    cat = synthetic.build_sandbox_catalog()
+    w = synthetic.scenario_window()
+    return Scenario(
+        scenario_id=synthetic.SANDBOX_SCENARIO_ID,
+        name="Sandbox: spawn junk, autopilot dodges",
+        kind="sandbox",
+        description="Live sandbox: the synthetic primary on its 407 km, 65° orbit with nothing staged. Drop space "
+                    "junk into the world and the simulation screens it, plans an avoidance burn and flies it. "
+                    "All states are generated, not observed; nothing here commands a spacecraft.",
+        primary_id=synthetic.PRIMARY_ID,
+        catalog=cat,
+        start_unix=w["start_unix"], end_unix=w["end_unix"],
+        rendered_object_ids=[o.object_id for o in cat.values()],
+        pc_policy="provided_only",
+        disclaimers=COMMON_DISCLAIMERS + [
+            "Covariances in this scenario are illustrative scenario definitions, not measured uncertainties.",
+            "Spawned junk near the spacecraft is drawn enlarged so it can be seen; labels show the true size and distance.",
+        ],
     )
 
 
@@ -103,6 +126,7 @@ def build_real(live: bool = False) -> Scenario:
 
 BUILDERS: Dict[str, Callable[[], Scenario]] = {
     synthetic.SCENARIO_ID: build_synthetic,
+    synthetic.SANDBOX_SCENARIO_ID: build_sandbox,
     real.SCENARIO_ID: build_real,
 }
 
@@ -111,6 +135,7 @@ def list_scenarios() -> List[Dict[str, Any]]:
     return [
         {"scenario_id": synthetic.SCENARIO_ID, "name": "Scripted conjunction (synthetic)", "kind": "synthetic"},
         {"scenario_id": real.SCENARIO_ID, "name": "ISS vs. cataloged objects (real GP data)", "kind": "real"},
+        {"scenario_id": synthetic.SANDBOX_SCENARIO_ID, "name": "Sandbox: spawn junk, autopilot dodges", "kind": "sandbox"},
     ]
 
 

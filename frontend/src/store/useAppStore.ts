@@ -1,11 +1,20 @@
 import { create } from 'zustand';
 import { ApiError, api } from '../api/client';
-import type { LayerFlags } from '../globe/scene';
-import { controller } from '../simulation/controller';
+import type { CameraMode, LayerFlags, PreviousPath } from '../globe/scene';
+import { nextThreat } from '../lib/nextThreat';
+import { SPEED_OPTIONS, controller, type ControllerState } from '../simulation/controller';
+import { eventWithin } from '../simulation/events';
+import { KEEP_BEHIND_ORBITS, extensionNeeded, mergeTrajectory, nextChunk, stalled, trimTrajectory } from '../simulation/rolling';
+import { SLOW_FAR_S, SLOW_MAX_MISS_KM, earliestBurnAfterS, shouldEvaluate, slowSpeedFor } from '../sandbox/schedule';
+import { junkKindInfo } from '../sandbox/junkKinds';
 import type {
   AgentRun,
+  CommittedManeuver,
   Conjunction,
+  EvaluateAction,
   HealthResponse,
+  JunkKind,
+  JunkTypesResponse,
   Maneuver,
   ObjectDetail,
   ObjectSummary,
@@ -19,6 +28,13 @@ import type {
 } from '../types/api';
 
 export const DEFAULT_SCENARIO = 'synthetic-conjunction';
+/** Trajectory sample spacing per scenario kind (seconds). */
+const STEP_REAL_S = 120;
+const STEP_SYNTHETIC_S = 60;
+/** Orbit data kept behind a resumed sandbox clock (fraction of an orbit): the past trail and a little more. */
+const TRAIL_FRACTION = 0.25;
+/** A pass is over this long after its closest approach: the selection moves on to the next threat. */
+const PASS_DONE_S = 90;
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.status === 0 ? e.message : `${e.message} (HTTP ${e.status})`;
@@ -29,6 +45,30 @@ function byId<T extends { object_id: string }>(items: T[]): Record<string, T> {
   const out: Record<string, T> = {};
   for (const it of items) out[it.object_id] = it;
   return out;
+}
+
+export function isoOf(unix: number): string {
+  return new Date(unix * 1000).toISOString();
+}
+
+export interface SandboxState {
+  /** The loaded scenario is the sandbox (kind 'sandbox'). */
+  enabled: boolean;
+  autopilot: boolean;
+  spawnedIds: string[];
+  randomCount: number;
+  evaluateInFlight: boolean;
+  /** A forced evaluation asked for while one was running. */
+  pendingEvaluate: boolean;
+  spawnInFlight: boolean;
+  lastEvaluatedUnix: number | null;
+  lastEvaluateRealMs: number;
+  /** End of the horizon the last evaluation screened. */
+  screeningEndUnix: number | null;
+  lastActions: EvaluateAction[];
+  /** Unavoidable passes already announced (conjunction ids). */
+  announced: string[];
+  junkTypes: JunkTypesResponse | null;
 }
 
 export interface AppState {
@@ -44,6 +84,25 @@ export interface AppState {
   scenarioError: string | null;
   objects: Record<string, ObjectSummary>;
   trajectories: Record<string, Trajectory>;
+  /** The span of orbit data loaded for the rendered objects (the scenario window, or the rolling window in the sandbox). */
+  dataWindow: { startUnix: number; endUnix: number } | null;
+  rollingLoading: boolean;
+  rollingRetryAtMs: number;
+  /** The clock caught up with the loaded data and waits for the next chunk. */
+  dataStall: boolean;
+  pausedForData: boolean;
+  /** The primary's path before its latest committed burn (the dashed original on the globe). */
+  previousPrimaryTrajectory: PreviousPath | null;
+  /** A committed burn is firing on the main globe right now. */
+  burnFiring: { maneuverId: string } | null;
+  /** Slow motion around a pass or a burn is holding the speed down; the user's speed is restored afterwards. */
+  autoSlow: { restoreSpeed: number; eventId: string; kind: 'burn' | 'tca' } | null;
+  /** An event (pass or burn) the user overrode the slow motion for. */
+  autoSlowSkip: string | null;
+  /** The corner close-up's zoom requests (factor > 1 zooms in); the nonce makes each press count. */
+  insetZoom: { factor: number; nonce: number };
+  /** Bumped to put the close-up back on its default view of the spacecraft. */
+  insetResetNonce: number;
   selectedObjectId: string | null;
   objectDetail: ObjectDetail | null;
   objectDetailLoading: boolean;
@@ -66,12 +125,19 @@ export interface AppState {
   decisionError: string | null;
   layers: LayerFlags;
   cameraResetNonce: number;
+  /** Globe camera: 'world' looks around the turning Earth, 'follow' rides with the spacecraft. */
+  cameraMode: CameraMode;
   notice: string | null;
   /** The right-hand mission panel is open (collapsed to a handle otherwise). */
   missionPanelOpen: boolean;
+  /** Sandbox: hold the clock down around each closest approach so the pass is watchable. */
+  slowForPasses: boolean;
+  sandbox: SandboxState;
 
   selectedConjunction: () => Conjunction | null;
   selectedManeuver: () => Maneuver | null;
+  /** Burns that are part of the primary's trajectory (approved by a human or committed by the autopilot). */
+  committedManeuvers: () => CommittedManeuver[];
 
   init: () => Promise<void>;
   loadScenario: (id: string) => Promise<void>;
@@ -88,10 +154,36 @@ export interface AppState {
   reject: (maneuverId: string, reason?: string) => Promise<void>;
   toggleLayer: (key: keyof LayerFlags) => void;
   resetCamera: () => void;
+  setCameraMode: (mode: CameraMode) => void;
   setSceneReady: (ok: boolean, error?: string) => void;
+  setNotice: (text: string | null) => void;
   dismissNotice: () => void;
   toggleMissionPanel: () => void;
+  setSpeed: (speed: number) => void;
+  setSlowForPasses: (on: boolean) => void;
+  setBurnFiring: (info: { maneuverId: string } | null) => void;
+  zoomInset: (factor: number) => void;
+  resetInset: () => void;
+  /** Every clock notification: rolling data, sandbox evaluation, slow motion around passes. */
+  onClockTick: (state: ControllerState) => void;
+  /** The work of onClockTick (separate so a tick caused by a tick is ignored). */
+  liveTick: (state: ControllerState) => void;
+  extendTrajectories: () => Promise<void>;
+  /** Re-read the primary's path (its committed burns included); `replacedAtBurnUnix` keeps the old path as the dashed original. */
+  refreshPrimaryTrajectory: (replacedAtBurnUnix: number | null) => Promise<void>;
+  evaluateSandbox: (trigger: 'load' | 'tick' | 'spawn' | 'autopilot' | 'manual') => Promise<void>;
+  spawnJunk: (kind: JunkKind, opts?: { timeToTcaS?: number }) => Promise<void>;
+  spawnRandom: (count: number) => Promise<void>;
+  /** Take the `count` most recently spawned pieces out of the sandbox. */
+  removeJunk: (count: number) => Promise<void>;
+  setAutopilot: (on: boolean) => Promise<void>;
+  setRandomCount: (n: number) => void;
 }
+
+const EMPTY_SANDBOX: SandboxState = {
+  enabled: false, autopilot: false, spawnedIds: [], randomCount: 5, evaluateInFlight: false, pendingEvaluate: false,
+  spawnInFlight: false, lastEvaluatedUnix: null, lastEvaluateRealMs: 0, screeningEndUnix: null, lastActions: [], announced: [], junkTypes: null,
+};
 
 const EMPTY_SESSION = {
   screening: null,
@@ -107,16 +199,95 @@ const EMPTY_SESSION = {
   decisionError: null,
   selectedObjectId: null,
   objectDetail: null,
+  previousPrimaryTrajectory: null,
+  burnFiring: null,
+  autoSlow: null,
+  autoSlowSkip: null,
 } as const;
 
 const MISSION_PANEL_KEY = 'aegis-orbit.missionPanelOpen';
+const SPEED_KEY = 'aegis-orbit.simSpeed';
+const SLOW_FOR_PASSES_KEY = 'aegis-orbit.slowForPasses';
 
+// Per-viewer conveniences only: storage can be empty or throw (private windows, blocked site data).
 function readMissionPanelOpen(): boolean {
   try {
     return localStorage.getItem(MISSION_PANEL_KEY) !== '0';
   } catch {
     return true;
   }
+}
+
+function readSpeed(): number {
+  try {
+    const v = Number(localStorage.getItem(SPEED_KEY));
+    return SPEED_OPTIONS.includes(v) ? v : 60;
+  } catch {
+    return 60;
+  }
+}
+
+function readSlowForPasses(): boolean {
+  try {
+    return localStorage.getItem(SLOW_FOR_PASSES_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function persist(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // storage unavailable: the choice lasts for this session only
+  }
+}
+
+/** `?scenario=` on /mission opens that scenario (the home page links to each). */
+function initialScenarioId(): string {
+  try {
+    return new URLSearchParams(window.location.search).get('scenario') || DEFAULT_SCENARIO;
+  } catch {
+    return DEFAULT_SCENARIO;
+  }
+}
+
+function rememberScenarioInUrl(id: string): void {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('scenario') === id) return;
+    url.searchParams.set('scenario', id);
+    window.history.replaceState(null, '', url);
+  } catch {
+    // not in a browser, or history unavailable
+  }
+}
+
+// onClockTick changes the clock speed, which notifies the clock's subscribers, which includes onClockTick:
+// the store is updated before the speed changes and nested ticks are ignored.
+let ticking = false;
+
+function stepFor(kind: ScenarioDetail['kind']): number {
+  return kind === 'real' ? STEP_REAL_S : STEP_SYNTHETIC_S;
+}
+
+function primaryPeriod(state: Pick<AppState, 'scenario' | 'objects'>): number {
+  return (state.scenario && state.objects[state.scenario.primary_id]?.period_s) || 5600;
+}
+
+/** The screening a sandbox evaluation returns, in the shape the panels read. */
+function screeningFromEvaluate(scenario: ScenarioDetail, conjunctions: Conjunction[], stats: Record<string, unknown>, simulation: SimulationState): ScreenResponse {
+  return {
+    scenario_id: scenario.scenario_id,
+    primary_id: scenario.primary_id,
+    conjunctions,
+    stats,
+    co_orbital: [],
+    propagation_failures: [],
+    overall_threat_state: simulation.overall_threat_state,
+    pc_policy: scenario.pc_policy,
+    thresholds: scenario.thresholds,
+  };
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -126,12 +297,23 @@ export const useAppStore = create<AppState>()((set, get) => ({
   sceneReady: false,
   sceneError: null,
   scenarios: [],
-  scenarioId: DEFAULT_SCENARIO,
+  scenarioId: initialScenarioId(),
   scenario: null,
   scenarioLoading: false,
   scenarioError: null,
   objects: {},
   trajectories: {},
+  dataWindow: null,
+  rollingLoading: false,
+  rollingRetryAtMs: 0,
+  dataStall: false,
+  pausedForData: false,
+  previousPrimaryTrajectory: null,
+  burnFiring: null,
+  autoSlow: null,
+  autoSlowSkip: null,
+  insetZoom: { factor: 1, nonce: 0 },
+  insetResetNonce: 0,
   selectedObjectId: null,
   objectDetail: null,
   objectDetailLoading: false,
@@ -154,13 +336,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
   decisionError: null,
   layers: { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true },
   cameraResetNonce: 0,
+  cameraMode: 'world',
   notice: null,
   missionPanelOpen: readMissionPanelOpen(),
+  slowForPasses: readSlowForPasses(),
+  sandbox: EMPTY_SANDBOX,
 
   selectedConjunction: () => {
     const { screening, selectedConjunctionId } = get();
     return screening?.conjunctions.find((c) => c.conjunction_id === selectedConjunctionId) ?? null;
   },
+  committedManeuvers: () => get().simulation?.committed_maneuvers ?? [],
   selectedManeuver: () => {
     const { plan, selectedManeuverId } = get();
     return plan?.candidates.find((c) => c.maneuver_id === selectedManeuverId) ?? null;
@@ -172,7 +358,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const health = await api.health();
       const scenarios = await api.scenarios();
       set({ backendStatus: 'online', health, scenarios: scenarios ?? [] });
-      await get().loadScenario(get().scenarioId);
+      const wanted = get().scenarioId;
+      const known = (scenarios ?? []).some((s) => s.scenario_id === wanted);
+      await get().loadScenario(known || !(scenarios ?? []).length ? wanted : DEFAULT_SCENARIO);
     } catch (e) {
       set({ backendStatus: 'offline', backendError: errMsg(e), scenarios: [] });
     }
@@ -180,36 +368,63 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   loadScenario: async (id) => {
     controller.pause();
-    set({ scenarioId: id, scenarioLoading: true, scenarioError: null, scenario: null, objects: {}, trajectories: {}, simulation: null, ...EMPTY_SESSION });
+    set({
+      scenarioId: id, scenarioLoading: true, scenarioError: null, scenario: null, objects: {}, trajectories: {}, simulation: null,
+      dataWindow: null, dataStall: false, pausedForData: false, rollingLoading: false, sandbox: EMPTY_SANDBOX, ...EMPTY_SESSION,
+    });
     try {
       const detail = await api.scenario(id);
       const objs = await api.objects(id);
-      const step = detail.kind === 'real' ? 120 : 60;
-      const { trajectories } = await api.trajectories(id, detail.rendered_object_ids ?? [], step);
-      controller.setWindow(detail.window.start_unix, detail.window.end_unix);
+      const step = stepFor(detail.kind);
+      const sandbox = detail.kind === 'sandbox';
+      const period = objs?.objects?.find((o) => o.object_id === detail.primary_id)?.period_s ?? 5600;
+      const windowStart = detail.window.start_unix;
+      // A sandbox session outlives the page: after a reload the clock resumes where the backend last saw
+      // it (spawned junk and committed burns are dated there), with a short tail of data behind it.
+      const resumeAt = sandbox && detail.simulation.clock_unix ? Math.max(windowStart, detail.simulation.clock_unix) : windowStart;
+      const start = sandbox ? Math.max(windowStart, resumeAt - period * TRAIL_FRACTION) : windowStart;
+      // The realistic and scripted scenarios load their whole window; the sandbox loads a first chunk and
+      // keeps fetching ahead of the clock (see extendTrajectories).
+      const end = sandbox ? nextChunk(resumeAt, period, readSpeed(), step).end : detail.window.end_unix;
+      const { trajectories } = await api.trajectories(id, detail.rendered_object_ids ?? [], step, isoOf(start), isoOf(end));
+      if (get().scenarioId !== id) return;
+      // Their fixed window keeps Play and the scrubber; the sandbox clock is open-ended.
+      controller.setWindow(windowStart, sandbox ? null : detail.window.end_unix, resumeAt);
       set({
         scenario: detail,
         objects: byId(objs?.objects ?? []),
         trajectories: byId(trajectories ?? []),
         simulation: detail.simulation,
         scenarioLoading: false,
+        dataWindow: { startUnix: start, endUnix: end },
+        sandbox: sandbox
+          ? { ...EMPTY_SANDBOX, enabled: true, autopilot: detail.simulation.autopilot, spawnedIds: detail.simulation.spawned_object_ids ?? [] }
+          : EMPTY_SANDBOX,
       });
+      rememberScenarioInUrl(id);
+      if (sandbox) {
+        // live from the first frame: the spacecraft is already orbiting when the page opens
+        controller.setSpeed(readSpeed());
+        controller.play();
+        void api.junkTypes().then((junkTypes) => {
+          if (get().scenarioId === id) set({ sandbox: { ...get().sandbox, junkTypes } });
+        }).catch(() => undefined);
+        void get().evaluateSandbox('load');
+      }
       // Rehydrate session artefacts that already exist on the backend (e.g. after a page reload).
-      if (detail.simulation.screening_performed) {
+      if (detail.simulation.screening_performed && !sandbox) {
         try {
           const scr = await api.conjunctions(id);
-          const first = scr.conjunctions[0]?.conjunction_id ?? null;
-          set({ screening: scr, selectedConjunctionId: detail.simulation.active_conjunction_id ?? first });
+          const committedTimes = detail.simulation.burn_times_unix ?? [];
+          set({ screening: scr, selectedConjunctionId: detail.simulation.active_conjunction_id ?? nextThreat(scr.conjunctions, committedTimes, controller.currentUnix) });
           const approved = detail.simulation.approved_maneuver;
-          const cid = approved?.conjunction_id ?? first;
-          if (cid) {
-            if (approved || detail.simulation.agent_run_count > 0) {
-              try {
-                const plan = await api.existingPlan(id, cid);
-                await hydratePlan(set, get, plan, approved?.maneuver_id ?? null);
-              } catch {
-                /* no plan yet */
-              }
+          const cid = approved?.conjunction_id ?? scr.conjunctions[0]?.conjunction_id ?? null;
+          if (cid && (approved || detail.simulation.agent_run_count > 0)) {
+            try {
+              const plan = await api.existingPlan(id, cid);
+              await hydratePlan(set, get, plan, approved?.maneuver_id ?? null);
+            } catch {
+              /* no plan yet */
             }
           }
         } catch {
@@ -217,7 +432,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
       }
     } catch (e) {
-      set({ scenarioLoading: false, scenarioError: errMsg(e), objects: {}, trajectories: {} });
+      if (get().scenarioId === id) set({ scenarioLoading: false, scenarioError: errMsg(e), objects: {}, trajectories: {} });
     }
   },
 
@@ -226,10 +441,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     controller.pause();
     set({ scenarioLoading: true, scenarioError: null, ...EMPTY_SESSION });
     try {
-      const detail = await api.resetScenario(id);
-      controller.setWindow(detail.window.start_unix, detail.window.end_unix);
-      controller.reset();
-      set({ scenario: detail, simulation: detail.simulation, scenarioLoading: false, notice: 'Scenario reset to its initial state.' });
+      await api.resetScenario(id);
+      // A reset rebuilds the backend session: committed burns and spawned junk are gone, so reload everything.
+      await get().loadScenario(id);
+      set({ notice: 'Scenario reset to its initial state.' });
     } catch (e) {
       set({ scenarioLoading: false, scenarioError: errMsg(e) });
     }
@@ -245,8 +460,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!selectedObjectId) return;
     set({ objectDetailLoading: true });
     try {
-      const at = new Date(controller.currentUnix * 1000).toISOString();
-      const detail = await api.objectDetail(scenarioId, selectedObjectId, at);
+      const detail = await api.objectDetail(scenarioId, selectedObjectId, isoOf(controller.currentUnix));
       if (get().selectedObjectId === selectedObjectId) set({ objectDetail: detail, objectDetailLoading: false });
     } catch (e) {
       set({ objectDetailLoading: false, notice: `Object details unavailable: ${errMsg(e)}` });
@@ -254,18 +468,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   runScreening: async (pcPolicy) => {
-    const { scenarioId } = get();
+    const { scenarioId, sandbox } = get();
     set({ screeningLoading: true, screeningError: null });
     try {
-      const scr = await api.screen(scenarioId, pcPolicy ? { pc_policy: pcPolicy } : {});
+      const scr = await api.screen(scenarioId, {
+        ...(pcPolicy ? { pc_policy: pcPolicy } : {}),
+        ...(sandbox.enabled ? { start: isoOf(controller.currentUnix) } : {}),
+      });
       const sim = await api.simulationState(scenarioId);
-      const first = scr.conjunctions[0]?.conjunction_id ?? null;
       const keepPlan = get().plan && scr.conjunctions.some((c) => c.conjunction_id === get().plan?.conjunction_id);
       set({
         screening: scr,
         simulation: sim,
         screeningLoading: false,
-        selectedConjunctionId: first,
+        selectedConjunctionId: nextThreat(scr.conjunctions, sim.burn_times_unix ?? [], controller.currentUnix),
         plan: keepPlan ? get().plan : null,
         selectedManeuverId: keepPlan ? get().selectedManeuverId : null,
         candidateTrajectories: keepPlan ? get().candidateTrajectories : {},
@@ -278,12 +494,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   selectConjunction: (id) => set({ selectedConjunctionId: id }),
 
   planManeuvers: async (conjunctionId) => {
-    const { scenarioId } = get();
+    const { scenarioId, sandbox } = get();
     const cid = conjunctionId ?? get().selectedConjunctionId;
     if (!cid) return;
     set({ planLoading: true, planError: null });
     try {
-      const plan = await api.planManeuvers(scenarioId, cid, 3);
+      const plan = await api.planManeuvers(scenarioId, cid, 3, sandbox.enabled ? isoOf(controller.currentUnix + 120) : undefined);
       await hydratePlan(set, get, plan, null);
       set({ planLoading: false });
       // Secondary screening for the recommended candidates so the comparison is complete.
@@ -336,7 +552,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // The agent may have screened and planned; pull those artefacts into the UI.
       try {
         const scr = await api.conjunctions(scenarioId);
-        const cid = run.report?.threat.conjunction_id ?? scr.conjunctions[0]?.conjunction_id ?? null;
+        const cid = run.report?.threat.conjunction_id ?? nextThreat(scr.conjunctions, run.simulation.burn_times_unix ?? [], controller.currentUnix);
         set({ screening: scr, selectedConjunctionId: cid });
         if (cid) {
           try {
@@ -361,12 +577,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       const res = await api.approve(scenarioId, maneuverId);
       const checks = res.secondary_check ? { ...get().secondaryChecks, [maneuverId]: res.secondary_check } : get().secondaryChecks;
-      let candidateTrajectories = get().candidateTrajectories;
-      if (!candidateTrajectories[maneuverId]) {
-        const t = await api.trajectory(scenarioId, get().scenario!.primary_id, { maneuver_id: maneuverId, step_s: 60 });
-        candidateTrajectories = { ...candidateTrajectories, [maneuverId]: t };
+      set({ simulation: res.simulation, secondaryChecks: checks, decisionLoading: false });
+      // The burn is now part of the trajectory: the globe draws the committed path, the old one stays dashed.
+      await get().refreshPrimaryTrajectory(res.maneuver?.burn_time_unix ?? null);
+      // Commit re-screens against the new path (ids can change) and candidates planned before it are stale.
+      try {
+        const scr = await api.conjunctions(scenarioId);
+        const committedIds = new Set((res.simulation.committed_maneuvers ?? []).map((m) => m.maneuver_id));
+        const kept: Record<string, Trajectory> = {};
+        for (const [mid, t] of Object.entries(get().candidateTrajectories)) if (committedIds.has(mid)) kept[mid] = t;
+        set({
+          screening: scr,
+          plan: null,
+          selectedManeuverId: null,
+          candidateTrajectories: kept,
+          selectedConjunctionId: nextThreat(scr.conjunctions, res.simulation.burn_times_unix ?? [], controller.currentUnix),
+        });
+      } catch {
+        /* the previous screening stays on screen */
       }
-      set({ simulation: res.simulation, secondaryChecks: checks, candidateTrajectories, selectedManeuverId: maneuverId, decisionLoading: false });
     } catch (e) {
       set({ decisionLoading: false, decisionError: errMsg(e) });
     }
@@ -374,10 +603,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   reject: async (maneuverId, reason) => {
     const { scenarioId } = get();
+    const wasCommitted = get().committedManeuvers().some((m) => m.maneuver_id === maneuverId);
     set({ decisionLoading: true, decisionError: null });
     try {
       const res = await api.reject(scenarioId, maneuverId, reason);
       set({ simulation: res.simulation, decisionLoading: false });
+      if (wasCommitted) {
+        await get().refreshPrimaryTrajectory(null);
+        try {
+          const scr = await api.conjunctions(scenarioId);
+          set({ screening: scr, selectedConjunctionId: nextThreat(scr.conjunctions, res.simulation.burn_times_unix ?? [], controller.currentUnix) });
+        } catch {
+          /* keep the previous screening */
+        }
+      }
     } catch (e) {
       set({ decisionLoading: false, decisionError: errMsg(e) });
     }
@@ -385,17 +624,321 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   toggleLayer: (key) => set({ layers: { ...get().layers, [key]: !get().layers[key] } }),
   resetCamera: () => set({ cameraResetNonce: get().cameraResetNonce + 1 }),
+  setCameraMode: (mode) => set({ cameraMode: mode }),
   setSceneReady: (ok, error) => set({ sceneReady: ok, sceneError: error ?? null }),
+  setNotice: (text) => set({ notice: text }),
   dismissNotice: () => set({ notice: null }),
   toggleMissionPanel: () => {
     const open = !get().missionPanelOpen;
-    try {
-      localStorage.setItem(MISSION_PANEL_KEY, open ? '1' : '0');
-    } catch {
-      // storage unavailable (private window, blocked site data): the choice lasts for this session only
-    }
+    persist(MISSION_PANEL_KEY, open ? '1' : '0');
     set({ missionPanelOpen: open });
   },
+  setSpeed: (speed) => {
+    // a speed the user picks during slow motion stands for the rest of that pass or burn
+    const slow = get().autoSlow;
+    set({ autoSlow: null, autoSlowSkip: slow?.eventId ?? get().autoSlowSkip });
+    persist(SPEED_KEY, String(speed));
+    controller.setSpeed(speed);
+  },
+  setSlowForPasses: (on) => {
+    persist(SLOW_FOR_PASSES_KEY, on ? '1' : '0');
+    const { autoSlow } = get();
+    set({ slowForPasses: on, autoSlow: on ? autoSlow : null });
+    if (!on && autoSlow) controller.setSpeed(autoSlow.restoreSpeed);
+  },
+  setBurnFiring: (info) => {
+    if ((get().burnFiring?.maneuverId ?? null) !== (info?.maneuverId ?? null)) set({ burnFiring: info });
+  },
+  zoomInset: (factor) => set({ insetZoom: { factor, nonce: get().insetZoom.nonce + 1 } }),
+  resetInset: () => set({ insetResetNonce: get().insetResetNonce + 1 }),
+
+  // ---------------------------------------------------------------- the live loop (sandbox)
+  onClockTick: (st) => {
+    if (ticking) return;
+    ticking = true;
+    try {
+      get().liveTick(st);
+    } finally {
+      ticking = false;
+    }
+  },
+
+  liveTick: (st) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario) return;
+    const now = st.currentUnix;
+    const period = primaryPeriod(s);
+    if (s.dataWindow) {
+      if (st.playing && stalled(now, s.dataWindow.endUnix)) {
+        controller.pause();
+        set({ dataStall: true, pausedForData: true });
+      }
+      if (extensionNeeded(now, st.speed, s.dataWindow.endUnix, period)) void s.extendTrajectories();
+    }
+    const sb = s.sandbox;
+    if (shouldEvaluate({ enabled: sb.enabled, inFlight: sb.evaluateInFlight, nowUnix: now, lastEvaluatedUnix: sb.lastEvaluatedUnix, screeningEndUnix: sb.screeningEndUnix, periodS: period, lastEvaluateRealMs: sb.lastEvaluateRealMs, realNowMs: performance.now() })) {
+      void s.evaluateSandbox('tick');
+    }
+    // a pass that is over no longer deserves the spotlight: move the selection on
+    const selected = s.selectedConjunction();
+    if (selected && selected.tca_unix < now - PASS_DONE_S && s.screening) {
+      const upcoming = s.screening.conjunctions.filter((c) => c.tca_unix > now);
+      const next = nextThreat(upcoming, s.simulation?.burn_times_unix ?? [], now);
+      set({ selectedConjunctionId: next !== selected.conjunction_id ? next : null });
+    }
+    // slow motion around a dodge burn or a close pass
+    const ev = s.slowForPasses ? eventWithin(s.screening, s.simulation?.committed_maneuvers, now, SLOW_FAR_S, SLOW_MAX_MISS_KM) : null;
+    const eligible = ev && ev.id !== s.autoSlowSkip ? ev : null;
+    if (eligible) {
+      const base = s.autoSlow?.restoreSpeed ?? st.speed;
+      const target = slowSpeedFor(eligible.atUnix - now, base);
+      if (target !== null) {
+        if (!s.autoSlow || s.autoSlow.eventId !== eligible.id) set({ autoSlow: { restoreSpeed: s.autoSlow?.restoreSpeed ?? st.speed, eventId: eligible.id, kind: eligible.kind } });
+        if (st.speed !== target) controller.setSpeed(target);
+        return;
+      }
+    }
+    if (s.autoSlow) {
+      set({ autoSlow: null });
+      controller.setSpeed(s.autoSlow.restoreSpeed);
+    }
+  },
+
+  extendTrajectories: async () => {
+    const s = get();
+    if (!s.scenario || !s.dataWindow || s.rollingLoading || performance.now() < s.rollingRetryAtMs) return;
+    const scenarioId = s.scenario.scenario_id;
+    const resetCount = s.scenario.simulation.reset_count;
+    const period = primaryPeriod(s);
+    const step = stepFor(s.scenario.kind);
+    const ids = Array.from(new Set([...(s.scenario.rendered_object_ids ?? []), ...s.sandbox.spawnedIds]));
+    const { start, end } = nextChunk(s.dataWindow.endUnix, period, controller.speed, step);
+    set({ rollingLoading: true });
+    try {
+      const { trajectories: chunks } = await api.trajectories(scenarioId, ids, step, isoOf(start), isoOf(end));
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId || cur.scenario.simulation.reset_count !== resetCount || !cur.dataWindow) return;
+      const keepFrom = controller.currentUnix - KEEP_BEHIND_ORBITS * period;
+      const merged: Record<string, Trajectory> = { ...cur.trajectories };
+      for (const c of chunks ?? []) {
+        const existing = merged[c.object_id];
+        merged[c.object_id] = existing ? trimTrajectory(mergeTrajectory(existing, c), keepFrom) : c;
+      }
+      set({
+        trajectories: merged,
+        dataWindow: { startUnix: Math.max(cur.dataWindow.startUnix, keepFrom), endUnix: Math.max(cur.dataWindow.endUnix, end) },
+        rollingLoading: false,
+        dataStall: false,
+      });
+      if (get().pausedForData) {
+        set({ pausedForData: false });
+        controller.play();
+      }
+    } catch (e) {
+      set({ rollingLoading: false, rollingRetryAtMs: performance.now() + 5000, notice: `Orbit data could not be extended: ${errMsg(e)}` });
+    } finally {
+      if (get().rollingLoading) set({ rollingLoading: false });
+    }
+  },
+
+  refreshPrimaryTrajectory: async (replacedAtBurnUnix) => {
+    const s = get();
+    if (!s.scenario || !s.dataWindow) return;
+    const scenarioId = s.scenario.scenario_id;
+    const primaryId = s.scenario.primary_id;
+    const step = stepFor(s.scenario.kind);
+    try {
+      let fetched = await api.trajectory(scenarioId, primaryId, { start: isoOf(s.dataWindow.startUnix), end: isoOf(s.dataWindow.endUnix), step_s: step });
+      let cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId) return;
+      // the rolling window may have grown meanwhile: fetch the tail too
+      let fetchedEnd = fetched.times_unix[fetched.times_unix.length - 1] ?? s.dataWindow.endUnix;
+      for (let guard = 0; guard < 3 && cur.dataWindow && cur.dataWindow.endUnix > fetchedEnd + step; guard++) {
+        const tail = await api.trajectory(scenarioId, primaryId, { start: isoOf(fetchedEnd), end: isoOf(cur.dataWindow.endUnix), step_s: step });
+        fetched = mergeTrajectory(fetched, tail);
+        fetchedEnd = fetched.times_unix[fetched.times_unix.length - 1] ?? fetchedEnd;
+        cur = get();
+        if (cur.scenario?.scenario_id !== scenarioId) return;
+      }
+      const previous = cur.trajectories[primaryId];
+      set({
+        trajectories: { ...cur.trajectories, [primaryId]: fetched },
+        previousPrimaryTrajectory: replacedAtBurnUnix !== null && previous ? { trajectory: previous, replacedAtBurnUnix } : null,
+      });
+    } catch (e) {
+      set({ notice: `The spacecraft's new path could not be loaded: ${errMsg(e)}` });
+    }
+  },
+
+  // ---------------------------------------------------------------- sandbox
+  evaluateSandbox: async (trigger) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario) return;
+    if (s.sandbox.evaluateInFlight) {
+      if (trigger !== 'tick') set({ sandbox: { ...get().sandbox, pendingEvaluate: true } });
+      return;
+    }
+    const scenarioId = s.scenario.scenario_id;
+    const resetCount = s.scenario.simulation.reset_count;
+    const now = controller.currentUnix;
+    const before = s.simulation?.committed_maneuvers?.length ?? 0;
+    set({ sandbox: { ...s.sandbox, evaluateInFlight: true, pendingEvaluate: false, lastEvaluateRealMs: performance.now() } });
+    try {
+      const res = await api.sandboxEvaluate(scenarioId, isoOf(now), earliestBurnAfterS(controller.speed));
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId || cur.scenario.simulation.reset_count !== resetCount) return;
+      const screening = screeningFromEvaluate(cur.scenario, res.conjunctions, res.screening.stats, res.simulation);
+      const committed = res.simulation.committed_maneuvers ?? [];
+      const announced = [...cur.sandbox.announced];
+      const notices: string[] = [];
+      for (const a of res.actions) {
+        if (a.outcome === 'COMMITTED' && a.maneuver_id && a.burn_time) {
+          notices.push(`Autopilot: burn ${a.direction ?? ''} ${(a.dv_mps ?? 0).toFixed(2)} m/s at ${a.burn_time.slice(11, 19)} UTC, pass widens to ${(a.post_miss_km ?? 0).toFixed(1)} km`);
+        } else if (a.outcome === 'UNAVOIDABLE' && !announced.includes(a.conjunction_id)) {
+          announced.push(a.conjunction_id);
+          notices.push(`Could not avoid ${a.secondary_id}: ${a.reason ?? 'no burn found'}`);
+        }
+      }
+      const keepSelection = cur.selectedConjunctionId && screening.conjunctions.some((c) => c.conjunction_id === cur.selectedConjunctionId && c.tca_unix > now - PASS_DONE_S);
+      set({
+        screening,
+        simulation: res.simulation,
+        selectedConjunctionId: keepSelection ? cur.selectedConjunctionId : nextThreat(screening.conjunctions, res.simulation.burn_times_unix ?? [], now),
+        sandbox: {
+          ...cur.sandbox,
+          autopilot: res.simulation.autopilot,
+          spawnedIds: res.simulation.spawned_object_ids ?? cur.sandbox.spawnedIds,
+          lastEvaluatedUnix: now,
+          screeningEndUnix: new Date(res.screening.end).getTime() / 1000,
+          lastActions: res.actions,
+          announced,
+        },
+        ...(notices.length ? { notice: notices[0] } : {}),
+      });
+      if (committed.length > before) {
+        const newest = committed.reduce((best, m) => (m.burn_time_unix > best ? m.burn_time_unix : best), -Infinity);
+        await get().refreshPrimaryTrajectory(Number.isFinite(newest) ? newest : null);
+      } else if (committed.length < before) {
+        await get().refreshPrimaryTrajectory(null);
+      }
+      // autopilot off: the planned burn waits in the decision panel
+      const waiting = res.actions.find((a) => a.outcome === 'AWAITING_APPROVAL' && a.maneuver_id);
+      if (waiting && !get().plan?.candidates.some((c) => c.maneuver_id === waiting.maneuver_id)) {
+        try {
+          const plan = await api.existingPlan(scenarioId, waiting.conjunction_id);
+          await hydratePlan(set, get, plan, waiting.maneuver_id);
+        } catch {
+          /* planned burn unavailable */
+        }
+      }
+    } catch (e) {
+      set({ notice: `Autopilot evaluation failed: ${errMsg(e)}`, sandbox: { ...get().sandbox, lastEvaluateRealMs: performance.now() + 20_000 } });
+    } finally {
+      const pending = get().sandbox.pendingEvaluate;
+      set({ sandbox: { ...get().sandbox, evaluateInFlight: false, pendingEvaluate: false } });
+      if (pending) void get().evaluateSandbox('manual');
+    }
+  },
+
+  spawnJunk: async (kind, opts = {}) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario || !s.dataWindow || s.sandbox.spawnInFlight) return;
+    const scenarioId = s.scenario.scenario_id;
+    const now = controller.currentUnix;
+    set({ sandbox: { ...s.sandbox, spawnInFlight: true } });
+    try {
+      const res = await api.sandboxSpawn(scenarioId, isoOf(now), kind, { time_to_tca_s: opts.timeToTcaS !== undefined ? Math.max(180, Math.round(opts.timeToTcaS)) : undefined });
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId) return;
+      const id = res.object.object_id;
+      set({ objects: { ...cur.objects, [id]: res.object }, simulation: res.simulation, sandbox: { ...cur.sandbox, spawnedIds: res.simulation.spawned_object_ids ?? [...cur.sandbox.spawnedIds, id] } });
+      const t = await api.trajectory(scenarioId, id, { start: isoOf(now), end: isoOf(Math.max(get().dataWindow?.endUnix ?? now, now + 600)), step_s: STEP_SYNTHETIC_S });
+      if (get().scenario?.scenario_id !== scenarioId) return;
+      const km = res.designed.miss_km < 1 ? `${Math.round(res.designed.miss_km * 1000)} m` : `${res.designed.miss_km.toFixed(1)} km`;
+      set({
+        trajectories: { ...get().trajectories, [id]: t },
+        notice: `Spawned ${junkKindInfo(kind).label.toLowerCase()} ${id}: closest approach in ${Math.round(res.designed.time_to_tca_s / 60)} min at ${km}`,
+      });
+    } catch (e) {
+      set({ notice: `Could not spawn junk: ${errMsg(e)}` });
+    } finally {
+      set({ sandbox: { ...get().sandbox, spawnInFlight: false } });
+    }
+    void get().evaluateSandbox('spawn');
+  },
+
+  spawnRandom: async (count) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario || !s.dataWindow || s.sandbox.spawnInFlight) return;
+    const scenarioId = s.scenario.scenario_id;
+    const now = controller.currentUnix;
+    set({ sandbox: { ...s.sandbox, spawnInFlight: true } });
+    try {
+      const res = await api.sandboxSpawnRandom(scenarioId, isoOf(now), Math.min(20, Math.max(1, Math.round(count))));
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId) return;
+      const ids = res.objects.map((o) => o.object_id);
+      set({ objects: { ...cur.objects, ...byId(res.objects) }, simulation: res.simulation, sandbox: { ...cur.sandbox, spawnedIds: res.simulation.spawned_object_ids ?? [...cur.sandbox.spawnedIds, ...ids] } });
+      const { trajectories } = await api.trajectories(scenarioId, ids, STEP_SYNTHETIC_S, isoOf(now), isoOf(Math.max(get().dataWindow?.endUnix ?? now, now + 600)));
+      if (get().scenario?.scenario_id !== scenarioId) return;
+      set({ trajectories: { ...get().trajectories, ...byId(trajectories ?? []) }, notice: `Spawned ${ids.length} pieces of junk around the next two orbits.` });
+    } catch (e) {
+      set({ notice: `Could not spawn junk: ${errMsg(e)}` });
+    } finally {
+      set({ sandbox: { ...get().sandbox, spawnInFlight: false } });
+    }
+    void get().evaluateSandbox('spawn');
+  },
+
+  setAutopilot: async (on) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario) return;
+    try {
+      const sim = await api.setAutopilot(s.scenario.scenario_id, on);
+      set({ simulation: sim, sandbox: { ...get().sandbox, autopilot: sim.autopilot }, notice: sim.autopilot ? 'Autopilot engaged: the simulation commits avoidance burns itself.' : 'Autopilot off: planned burns wait for your approval.' });
+      if (sim.autopilot) void get().evaluateSandbox('autopilot');
+    } catch (e) {
+      set({ notice: `Autopilot setting failed: ${errMsg(e)}` });
+    }
+  },
+
+  removeJunk: async (count) => {
+    const s = get();
+    if (!s.sandbox.enabled || !s.scenario || s.sandbox.spawnInFlight || count < 1) return;
+    const scenarioId = s.scenario.scenario_id;
+    set({ sandbox: { ...s.sandbox, spawnInFlight: true } });
+    try {
+      const res = await api.sandboxRemove(scenarioId, isoOf(controller.currentUnix), { count: Math.round(count) });
+      const cur = get();
+      if (cur.scenario?.scenario_id !== scenarioId) return;
+      const gone = new Set(res.removed);
+      const objects = { ...cur.objects };
+      const trajectories = { ...cur.trajectories };
+      for (const id of res.removed) {
+        delete objects[id];
+        delete trajectories[id];
+      }
+      const selectedGone = cur.selectedObjectId ? gone.has(cur.selectedObjectId) : false;
+      const conjGone = cur.selectedConjunction() ? gone.has(cur.selectedConjunction()!.secondary_id) : false;
+      set({
+        objects,
+        trajectories,
+        simulation: res.simulation,
+        screening: cur.screening ? { ...cur.screening, conjunctions: cur.screening.conjunctions.filter((c) => !gone.has(c.secondary_id)) } : cur.screening,
+        selectedObjectId: selectedGone ? null : cur.selectedObjectId,
+        objectDetail: selectedGone ? null : cur.objectDetail,
+        selectedConjunctionId: conjGone ? null : cur.selectedConjunctionId,
+        sandbox: { ...cur.sandbox, spawnedIds: res.simulation.spawned_object_ids ?? cur.sandbox.spawnedIds.filter((id) => !gone.has(id)) },
+        notice: res.removed.length ? `Removed ${res.removed.length} piece${res.removed.length === 1 ? '' : 's'} of junk from orbit.` : 'Nothing to remove.',
+      });
+    } catch (e) {
+      set({ notice: `Could not remove junk: ${errMsg(e)}` });
+    } finally {
+      set({ sandbox: { ...get().sandbox, spawnInFlight: false } });
+    }
+    void get().evaluateSandbox('spawn');
+  },
+  setRandomCount: (n) => set({ sandbox: { ...get().sandbox, randomCount: Math.min(20, Math.max(1, Math.round(n) || 1)) } }),
 }));
 
 async function hydratePlan(
@@ -404,15 +947,25 @@ async function hydratePlan(
   plan: PlanResponse,
   preferredManeuverId: string | null,
 ): Promise<void> {
-  const { scenarioId, scenario } = get();
+  const { scenarioId, scenario, dataWindow } = get();
   const ids = [...plan.recommended_ids];
   if (preferredManeuverId && !ids.includes(preferredManeuverId)) ids.push(preferredManeuverId);
   const existing = get().candidateTrajectories;
+  const range = dataWindow ? { start: isoOf(dataWindow.startUnix), end: isoOf(dataWindow.endUnix) } : {};
+  // Candidates planned against an earlier version of the primary (before a burn was committed) cannot be
+  // previewed on the committed path any more; the backend refuses them, so do not ask.
+  const sim = get().simulation;
+  const committed = new Set((sim?.committed_maneuvers ?? []).map((m) => m.maneuver_id));
+  const stale = (mid: string) => {
+    const cand = plan.candidates.find((c) => c.maneuver_id === mid);
+    return !!sim && !!cand && !committed.has(mid) && cand.primary_version != null && cand.primary_version !== sim.primary_version;
+  };
   const fetched = await Promise.all(
     ids.map(async (mid) => {
       if (existing[mid]) return [mid, existing[mid]] as const;
+      if (stale(mid)) return [mid, null] as const;
       try {
-        return [mid, await api.trajectory(scenarioId, scenario!.primary_id, { maneuver_id: mid, step_s: 60 })] as const;
+        return [mid, await api.trajectory(scenarioId, scenario!.primary_id, { maneuver_id: mid, step_s: stepFor(scenario!.kind), ...range })] as const;
       } catch {
         return [mid, null] as const;
       }

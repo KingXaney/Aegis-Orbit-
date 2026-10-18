@@ -1,9 +1,13 @@
 import { useEffect } from 'react';
 import GlobeView from './globe/GlobeView';
+import ClockControls from './panels/ClockControls';
+import JunkTray from './sandbox/JunkTray';
+import { startLiveLoop } from './simulation/liveLoop';
 import LayerControls from './panels/LayerControls';
 import MissionPanel from './panels/MissionPanel';
 import ObjectInspector from './panels/ObjectInspector';
 import SatelliteInset from './panels/SatelliteInset';
+import DodgeCard from './panels/DodgeCard';
 import TimelineBar from './panels/TimelineBar';
 import TopBar from './panels/TopBar';
 import { controller } from './simulation/controller';
@@ -23,10 +27,15 @@ export default function App() {
   const scenarioId = useAppStore((s) => s.scenarioId);
   const missionPanelOpen = useAppStore((s) => s.missionPanelOpen);
   const toggleMissionPanel = useAppStore((s) => s.toggleMissionPanel);
+  const isSandbox = useAppStore((s) => s.scenario?.kind === 'sandbox');
 
   useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __store?: typeof useAppStore }).__store = useAppStore;
     void init();
   }, [init]);
+
+  // rolling orbit data, the sandbox autopilot loop and slow motion around passes ride on the clock
+  useEffect(() => startLiveLoop(), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -54,12 +63,17 @@ export default function App() {
           <GlobeView />
         </div>
         {/* before the HUD, so the object inspector stays on top if the two meet */}
-        <SatelliteInset className="pointer-events-none absolute bottom-[92px] right-3 h-[200px] w-[280px]">
+        <SatelliteInset className="pointer-events-none absolute bottom-[112px] right-3 h-[200px] w-[280px]">
           <GlobeView variant="inset" />
         </SatelliteInset>
+        {/* the change of course while a dodge burn is near: above the close-up, bottom right */}
+        <DodgeCard className="pointer-events-auto absolute bottom-[112px] right-3 w-[280px] md:bottom-[320px]" />
         <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <TopBar />
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <TopBar />
+              <JunkTray />
+            </div>
             <div className="ml-auto flex flex-col items-end gap-2">
               <ObjectInspector />
             </div>
@@ -69,7 +83,8 @@ export default function App() {
               <LayerControls />
             </div>
             <div className="min-w-0 flex-1">
-              <TimelineBar />
+              {/* the realistic and scripted scenarios keep their timeline; the sandbox clock only pauses and changes speed */}
+              {isSandbox ? <ClockControls /> : <TimelineBar />}
             </div>
           </div>
         </div>

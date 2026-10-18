@@ -5,13 +5,41 @@ documented and configurable; none of them is a universal safety standard.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class PlannerProfile:
+    """Planner grid and acceptance rules for one kind of scenario (demonstration settings).
+
+    ``default`` is the realistic flow (human approval, long leads, small burns); ``sandbox`` is the
+    live synthetic scenario, where junk appears with little warning and the autopilot must find a
+    burn that meets the probability target *and* the distance target."""
+    name: str
+    lead_orbits: Tuple[float, ...]
+    dv_magnitudes_mps: Tuple[float, ...]
+    directions: Tuple[str, ...]
+    max_dv_mps: float
+    min_lead_time_s: float
+    require_distance_target: bool = False
+    earliest_burn_margin_s: float = 0.0  # a burn is never planned closer than this to "now"
+    burn_spacing_s: float = 60.0  # and never closer than this to the previous committed burn
+    screening_horizon_orbits: Optional[float] = None  # None: the scenario window
+
+
+def _floats(csv: str) -> Tuple[float, ...]:
+    return tuple(float(x) for x in csv.split(",") if x.strip())
+
+
+def _strs(csv: str) -> Tuple[str, ...]:
+    return tuple(x.strip() for x in csv.split(",") if x.strip())
 
 
 class Settings(BaseSettings):
@@ -54,6 +82,24 @@ class Settings(BaseSettings):
     planner_max_dv_mps: float = 1.0  # delta-v budget proxy
     planner_min_lead_time_s: float = 1800.0
     planner_numerical_step_s: float = 10.0
+
+    # --- Sandbox: the live synthetic scenario (demo settings) --------------
+    # Short leads and larger burns, because spawned junk can arrive with a fraction of an orbit of
+    # warning; the autopilot only commits burns that meet both the Pc and the distance target.
+    sandbox_lead_orbits: str = "0.1,0.25,0.5,1.0"
+    sandbox_dv_magnitudes_mps: str = "0.1,0.25,0.5,1.0,2.0,3.0,5.0"
+    sandbox_directions: str = "+T,-T,+R,-R"
+    sandbox_max_dv_mps: float = 5.0
+    sandbox_min_lead_time_s: float = 300.0
+    sandbox_earliest_burn_margin_s: float = 30.0
+    sandbox_burn_spacing_s: float = 60.0
+    sandbox_require_distance_target: bool = True
+    sandbox_screening_horizon_orbits: float = 2.0
+    sandbox_anchor_every_s: float = 7200.0  # re-anchor numerical states this often (integration cost)
+    sandbox_max_objects: int = 25  # spawned junk cap per session
+    sandbox_max_burns_per_evaluate: int = 3
+    sandbox_evaluate_min_interval_s: float = 5.0  # simulated seconds between evaluations unless something changed
+    sandbox_unavoidable_retry_s: float = 300.0  # simulated seconds before an unavoidable pass is re-tried
 
     # --- Perception (demo settings) ---------------------------------------
     perception_enabled: bool = True
@@ -102,6 +148,18 @@ class Settings(BaseSettings):
     @property
     def planner_direction_list(self) -> List[str]:
         return [x.strip() for x in self.planner_directions.split(",") if x.strip()]
+
+    def default_profile(self) -> PlannerProfile:
+        return PlannerProfile("default", tuple(self.planner_lead_orbit_list), tuple(self.planner_dv_list),
+                              tuple(self.planner_direction_list), self.planner_max_dv_mps, self.planner_min_lead_time_s)
+
+    def sandbox_profile(self) -> PlannerProfile:
+        return PlannerProfile("sandbox", _floats(self.sandbox_lead_orbits), _floats(self.sandbox_dv_magnitudes_mps),
+                              _strs(self.sandbox_directions), self.sandbox_max_dv_mps, self.sandbox_min_lead_time_s,
+                              require_distance_target=self.sandbox_require_distance_target,
+                              earliest_burn_margin_s=self.sandbox_earliest_burn_margin_s,
+                              burn_spacing_s=self.sandbox_burn_spacing_s,
+                              screening_horizon_orbits=self.sandbox_screening_horizon_orbits)
 
 
 @lru_cache(maxsize=1)

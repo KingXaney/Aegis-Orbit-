@@ -37,6 +37,7 @@ def compact_conjunction(sess: SimulationSession, c: Dict[str, Any]) -> Dict[str,
         "secondary_category": c.get("secondary_category"),
         "tca": c["tca"],
         "time_to_tca_s_from_window_start": round(c["tca_unix"] - sess.scenario.start_unix, 1),
+        "time_to_tca_s": round(c["tca_unix"] - (sess.clock_unix if sess.clock_unix is not None else sess.scenario.start_unix), 1),
         "miss_distance_km": round(c["miss_distance_km"], 4),
         "relative_speed_kms": round(c["relative_speed_kms"], 3),
         "pc": _compact_pc(c.get("pc")),
@@ -120,7 +121,8 @@ class ToolRegistry:
         if sess.screening is None or rescreen or window_hours is not None or pc_policy is not None:
             end = None
             if window_hours is not None:
-                end = iso(sess.scenario.start_unix + float(window_hours) * 3600.0)
+                origin = sess.clock_unix if sess.clock_unix is not None else sess.scenario.start_unix
+                end = iso(origin + float(window_hours) * 3600.0)
             res = service.run_screening(sess, end=end, pc_policy=pc_policy)
             conjs = res["conjunctions"]
             stats = res["stats"]

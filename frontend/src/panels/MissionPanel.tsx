@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useSimulation } from '../hooks/useSimulation';
-import { Badge, Button, Details, Empty, ErrorText, KeyValue, Section, Spinner, Stat, ThreatBadge } from '../components/ui';
+import { Badge, Button, Details, Empty, ErrorText, KeyValue, Section, Spinner, Stat, ThreatBadge, Toggle } from '../components/ui';
 import { formatCountdown, formatDuration, formatKm, formatPc, formatUtc, pcLabel } from '../lib/format';
 import type { Conjunction, Maneuver } from '../types/api';
 import CandidateChart from './CandidateChart';
@@ -70,7 +70,8 @@ function ThreatSection() {
     return (
       <Section title="Active threat">
         <Empty>
-          No close approach inside {String(stats?.screening_radius_km ?? '')} km during the window ({stats?.candidates_after_altitude_filter as number} candidates screened). The state is NORMAL.
+          No close approach inside {String(stats?.screening_radius_km ?? '')} km {scenario?.kind === 'sandbox' ? 'in the next two orbits' : 'during the window'} ({stats?.candidates_after_altitude_filter as number} candidates screened). The state is NORMAL.
+          {scenario?.kind === 'sandbox' && <div className="mt-1">Spawn some junk from the Space junk tray and the autopilot will deal with it.</div>}
           {scenario?.kind === 'real' && (
             <div className="mt-2">
               <Button size="sm" onClick={() => void loadScenario('synthetic-conjunction')}>Switch to the synthetic scenario</Button>
@@ -306,13 +307,38 @@ function DecisionSection() {
   const checks = useAppStore((s) => s.secondaryChecks);
   const runSecondaryCheck = useAppStore((s) => s.runSecondaryCheck);
   const secondaryLoading = useAppStore((s) => s.secondaryLoading);
+  const sim = useSimulation();
   const approvedId = simulation?.approved_maneuver_id ?? null;
+  const committed = simulation?.committed_maneuvers ?? [];
+  const committedIds = committed.map((c) => c.maneuver_id);
   const post = simulation?.post_approval ?? null;
   const check = m ? checks[m.maneuver_id] : undefined;
-  const canApprove = !!m && m.feasible && m.secondary_check?.validation_status !== 'FAIL' && approvedId !== m.maneuver_id && !loading;
+  const canApprove = !!m && m.feasible && m.secondary_check?.validation_status !== 'FAIL' && !committedIds.includes(m.maneuver_id) && !loading;
+  const latest = committed[committed.length - 1];
   return (
     <Section title="Human decision">
       {!m && <Empty>Select a candidate maneuver to approve or reject it. Approval only updates the simulation.</Empty>}
+      {committed.length > 0 && (
+        <div className="mb-2 rounded border border-safe/30 bg-safe/5 px-2 py-2 text-[10px]">
+          <div className="mb-1 font-semibold uppercase tracking-wider text-muted">Committed burns (part of the trajectory)</div>
+          <ul className="space-y-0.5">
+            {committed.map((b) => (
+              <li key={b.maneuver_id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5" title={b.maneuver_id}>
+                <span className="mono text-text">{formatUtc(b.burn_time, false).slice(0, 8)}</span>
+                <span className="text-muted">
+                  {b.direction} {b.dv_magnitude_mps.toFixed(2)} m/s → pass at {formatKm(b.post_miss_distance_km)}
+                </span>
+                <span className="text-dim">{b.source === 'autopilot' ? 'autopilot' : 'approved'}{b.burn_time_unix <= sim.currentUnix ? ' · fired' : ''}</span>
+                {latest && b.maneuver_id === latest.maneuver_id && b.burn_time_unix > sim.currentUnix && (
+                  <Button size="sm" variant="ghost" className="ml-auto" disabled={loading} onClick={() => void reject(b.maneuver_id, 'Withdrawn by operator')} title="Take the latest burn back out of the trajectory (only before it fires)">
+                    Withdraw
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {m && (
         <div className="space-y-2">
           <KeyValue
@@ -368,7 +394,7 @@ function DecisionSection() {
           <ul className="space-y-0.5 text-[10px] text-muted">
             {simulation.decisions.slice().reverse().map((d) => (
               <li key={d.decision_id}>
-                <span className="mono text-dim">{formatUtc(d.at, false)}</span> <span className={d.type === 'APPROVED' ? 'text-safe' : 'text-threat'}>{d.type}</span> <span className="mono">{d.maneuver_id}</span>
+                <span className="mono text-dim">{formatUtc(d.at, false)}</span> <span className={d.type === 'REJECTED' ? 'text-threat' : 'text-safe'}>{d.type.replace(/_/g, ' ')}</span> <span className="mono">{d.maneuver_id}</span>
                 {d.reason ? ` — ${d.reason}` : ''}
               </li>
             ))}
@@ -379,12 +405,97 @@ function DecisionSection() {
   );
 }
 
+const EVENT_TONE: Record<string, string> = {
+  COMMITTED: 'text-safe',
+  UNCOMMITTED: 'text-warn',
+  SPAWNED: 'text-tracked',
+  CLOSEST_APPROACH: 'text-muted',
+  AWAITING_APPROVAL: 'text-warn',
+  UNAVOIDABLE: 'text-threat',
+  AUTOPILOT: 'text-primary',
+  ANCHORED: 'text-dim',
+};
+
+/** Sandbox only: the autopilot's state, what it has flown, and the event log. */
+function SandboxSection() {
+  const sandbox = useAppStore((s) => s.sandbox);
+  const simulation = useAppStore((s) => s.simulation);
+  const setAutopilot = useAppStore((s) => s.setAutopilot);
+  const sim = useSimulation();
+  if (!sandbox.enabled) return null;
+  const committed = simulation?.committed_maneuvers ?? [];
+  const events = simulation?.events ?? [];
+  const fired = committed.filter((m) => m.burn_time_unix <= sim.currentUnix).length;
+  const totalDv = committed.reduce((sum, m) => sum + m.dv_magnitude_mps, 0);
+  const unavoidable = events.filter((e) => e.kind === 'UNAVOIDABLE');
+  const waiting = sandbox.lastActions.filter((a) => a.outcome === 'AWAITING_APPROVAL');
+  return (
+    <Section title="Autopilot" right={<Toggle label={sandbox.autopilot ? 'Engaged' : 'Off'} checked={sandbox.autopilot} onChange={() => void setAutopilot(!sandbox.autopilot)} />}>
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Junk spawned" value={sandbox.spawnedIds.length} />
+        <Stat label="Burns" value={`${fired}/${committed.length}`} sub="fired / committed" />
+        <Stat label="Δv used" value={`${totalDv.toFixed(2)} m/s`} sub={committed.length ? `${(totalDv / committed.length).toFixed(2)} m/s per dodge` : 'no burns yet'} />
+      </div>
+      <p className="mt-1 text-[10px] text-dim">
+        {sandbox.autopilot
+          ? 'The simulation screens the next two orbits, plans a burn for every pass that needs one (both the probability and the 5 km distance target) and flies it. Nothing commands a real spacecraft.'
+          : 'Planned burns wait in Human decision for your approval.'}
+        {waiting.length > 0 && ` ${waiting.length} burn${waiting.length === 1 ? '' : 's'} waiting for approval.`}
+      </p>
+      {committed.length > 0 && (
+        <table className="mt-2 w-full border-collapse">
+          <thead>
+            <tr className="text-left text-[9px] uppercase tracking-wider text-dim">
+              <th className="px-1 py-1 font-medium">Burn (UTC)</th>
+              <th className="px-1 py-1 font-medium">Δv</th>
+              <th className="px-1 py-1 font-medium">Pass after</th>
+              <th className="px-1 py-1 font-medium">By</th>
+              <th className="px-1 py-1 font-medium">State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {committed.slice().reverse().map((m) => (
+              <tr key={m.maneuver_id} className="border-t border-line text-[10px]" title={m.maneuver_id}>
+                <td className="mono whitespace-nowrap px-1 py-1 text-text">{formatUtc(m.burn_time, false).slice(0, 8)}</td>
+                <td className="mono whitespace-nowrap px-1 py-1 text-text">{m.direction} {m.dv_magnitude_mps.toFixed(2)}</td>
+                <td className="mono px-1 py-1 text-muted">{formatKm(m.post_miss_distance_km)}</td>
+                <td className="px-1 py-1 text-muted">{m.source === 'autopilot' ? 'autopilot' : 'you'}</td>
+                <td className="px-1 py-1">{m.burn_time_unix <= sim.currentUnix ? <Badge tone="safe">fired</Badge> : <Badge tone="info">upcoming</Badge>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {unavoidable.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-[10px] text-threat">
+          {unavoidable.slice(-3).map((e) => <li key={e.seq}>• {e.message}</li>)}
+        </ul>
+      )}
+      <div className="mt-2">
+        <Details summary={`Event log (${events.length})`} open>
+          <ul className="scrollbar-thin max-h-48 space-y-0.5 overflow-y-auto text-[10px]">
+            {events.length === 0 && <li className="text-dim">Nothing yet: spawn some junk.</li>}
+            {events.slice().reverse().slice(0, 60).map((e) => (
+              <li key={e.seq}>
+                <span className="mono text-dim">{e.at ? formatUtc(e.at, false).slice(0, 8) : '—'}</span>{' '}
+                <span className={EVENT_TONE[e.kind] ?? 'text-muted'}>{e.kind.replace(/_/g, ' ').toLowerCase()}</span>{' '}
+                <span className="text-muted">{e.message}</span>
+              </li>
+            ))}
+          </ul>
+        </Details>
+      </div>
+    </Section>
+  );
+}
+
 export default function MissionPanel() {
   const scenario = useAppStore((s) => s.scenario);
   return (
     <aside className="flex h-full w-full flex-col bg-panel/95 backdrop-blur lg:border-l lg:border-line" aria-label="Mission intelligence panel">
       <PanelHeader />
       <div className="scrollbar-thin flex-1 overflow-y-auto">
+        <SandboxSection />
         <ThreatSection />
         <AgentSection />
         <CandidatesSection />

@@ -54,11 +54,44 @@ describe('SampledTrajectory', () => {
     expect(traj.stateAt(600)!.p[0]).toBeCloseTo(a * Math.cos(w * 600), 9);
   });
 
-  it('lists points between two times with interpolated ends', () => {
+  it('lists points between two times at the native step, with exact ends', () => {
     const pts = traj.pointsBetween(45, 200);
     expect(pts[0].t).toBe(45);
     expect(pts[pts.length - 1].t).toBe(200);
-    expect(pts.map((p) => p.t)).toEqual([45, 60, 120, 180, 200]);
+    expect(pts.map((p) => p.t)).toEqual([45, 105, 165, 200]);
+  });
+
+  it('resamples at a requested step so consecutive chords bend by less than a degree', () => {
+    const pts = traj.pointsBetween(0, 2800, { stepS: 7 });
+    expect(pts.length).toBe(401);
+    expect(pts[0].t).toBe(0);
+    expect(pts[pts.length - 1].t).toBe(2800);
+    let worstDeg = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const u = [pts[i].p[0] - pts[i - 1].p[0], pts[i].p[1] - pts[i - 1].p[1], pts[i].p[2] - pts[i - 1].p[2]];
+      const v = [pts[i + 1].p[0] - pts[i].p[0], pts[i + 1].p[1] - pts[i].p[1], pts[i + 1].p[2] - pts[i].p[2]];
+      const cos = (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / (Math.hypot(...u) * Math.hypot(...v));
+      worstDeg = Math.max(worstDeg, (Math.acos(Math.min(1, cos)) * 180) / Math.PI);
+    }
+    expect(worstDeg).toBeLessThan(0.6);
+    for (const pt of pts) {
+      const exact = [a * Math.cos(w * pt.t), a * Math.sin(w * pt.t), 0];
+      expect(Math.hypot(pt.p[0] - exact[0], pt.p[1] - exact[1], pt.p[2] - exact[2])).toBeLessThan(0.001);
+    }
+  });
+
+  it('never returns more than maxPoints', () => {
+    const pts = traj.pointsBetween(0, 5000, { stepS: 1, maxPoints: 100 });
+    expect(pts.length).toBeLessThanOrEqual(100);
+    expect(pts[0].t).toBe(0);
+    expect(pts[pts.length - 1].t).toBe(5000);
+  });
+
+  it('clips the span to the sampled range', () => {
+    expect(traj.pointsBetween(-100, -50)).toEqual([]);
+    const pts = traj.pointsBetween(-100, 30, { stepS: 10 });
+    expect(pts[0].t).toBe(0);
+    expect(pts[pts.length - 1].t).toBe(30);
   });
 
   it('skips samples with missing positions', () => {

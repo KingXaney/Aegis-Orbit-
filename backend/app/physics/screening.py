@@ -23,15 +23,18 @@ coarse step must be small compared with the orbital period.
 from __future__ import annotations
 
 import time as _time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.optimize import minimize_scalar
 
 from ..data.catalog import OrbitalObject
-from .propagation import MODEL_NUMERICAL, PropagationResult, propagate, propagate_batch
+from .propagation import PropagationResult, anchored, anchored_with_state, propagate, propagate_batch
 from .time_utils import iso, time_grid
+
+# Re-anchoring lives in propagation (it understands committed-burn arcs); the old name stays importable.
+anchor = anchored
 
 
 @dataclass
@@ -133,16 +136,6 @@ def altitude_overlap_filter(primary: OrbitalObject, objects: Sequence[OrbitalObj
     return kept
 
 
-def anchor(obj: OrbitalObject, t_unix: float, step_s: float = 10.0) -> OrbitalObject:
-    """Return an object whose numerical state is re-anchored at t_unix so that
-    repeated evaluations near t are cheap. SGP4 objects are returned unchanged."""
-    if obj.propagation_model != MODEL_NUMERICAL:
-        return obj
-    res = propagate(obj, np.array([t_unix]), step_s)
-    return replace(obj, state_epoch_unix=float(t_unix), r0_teme_km=res.positions_km[0].copy(),
-                   v0_teme_kms=res.velocities_kms[0].copy())
-
-
 def relative_state(primary: OrbitalObject, secondary: OrbitalObject, t_unix: float, step_s: float = 10.0):
     rp = propagate(primary, np.array([t_unix]), step_s)
     rs = propagate(secondary, np.array([t_unix]), step_s)
@@ -152,10 +145,13 @@ def relative_state(primary: OrbitalObject, secondary: OrbitalObject, t_unix: flo
 
 
 def refine_tca(primary: OrbitalObject, secondary: OrbitalObject, t_lo: float, t_hi: float,
-               tol_s: float = 1e-3, numerical_step_s: float = 10.0) -> Dict[str, Any]:
-    """Minimise the inter-object distance inside [t_lo, t_hi] (bounded Brent)."""
-    p = anchor(primary, t_lo, numerical_step_s)
-    s = anchor(secondary, t_lo, numerical_step_s)
+               tol_s: float = 1e-3, numerical_step_s: float = 10.0, p_state=None, s_state=None) -> Dict[str, Any]:
+    """Minimise the inter-object distance inside [t_lo, t_hi] (bounded Brent).
+
+    ``p_state``/``s_state`` are optional (r, v) states already computed at t_lo (the coarse grid
+    samples); they save integrating each numerical object from its epoch again."""
+    p = anchored_with_state(primary, t_lo, *p_state) if p_state is not None else anchor(primary, t_lo, numerical_step_s)
+    s = anchored_with_state(secondary, t_lo, *s_state) if s_state is not None else anchor(secondary, t_lo, numerical_step_s)
     evals = {"n": 0}
 
     # Minimise over the offset from t_lo: absolute unix times (~1e9 s) would make the
@@ -263,8 +259,12 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
                 continue
             n_minima += 1
             t_lo, t_hi = float(times[i - 1]), float(times[i + 1])
+            p_state = (res_p.positions_km[i - 1], res_p.velocities_kms[i - 1])
+            s_state = (res_s.positions_km[i - 1], res_s.velocities_kms[i - 1])
+            if not (np.isfinite(p_state[0]).all() and np.isfinite(s_state[0]).all()):
+                p_state = s_state = None
             try:
-                ref = refine_tca(primary, obj, t_lo, t_hi, numerical_step_s=numerical_step_s)
+                ref = refine_tca(primary, obj, t_lo, t_hi, numerical_step_s=numerical_step_s, p_state=p_state, s_state=s_state)
             except ValueError as exc:
                 failures.append({"object_id": obj.object_id, "messages": [str(exc)]})
                 continue
@@ -281,7 +281,8 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
                 f"coarse sampling step {coarse_step_s:.0f} s; minima narrower than the step adjacent to another "
                 f"minimum may merge",
                 "SGP4 positions are mean-element estimates whose error grows with time from the element epoch "
-                "(typically km-level after a day)" if obj.propagation_model == "SGP4" or primary.propagation_model == "SGP4"
+                "(typically km-level after a day)"
+                if "SGP4" in ((obj.base_model or obj.propagation_model), (primary.base_model or primary.propagation_model))
                 else "synthetic states propagated with two-body + J2 only",
             ]}
             if obj.validation_status == "STALE":

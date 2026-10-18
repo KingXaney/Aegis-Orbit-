@@ -107,19 +107,29 @@ export class SampledTrajectory {
     return st ? st.p : null;
   }
 
-  /** Sample points between two times (inclusive of the interpolated end points). */
-  pointsBetween(t0: number, t1: number, maxPoints = 2000): { t: number; p: Vec3 }[] {
+  /** Typical spacing of the samples in seconds (the trajectory's own step when it is regular). */
+  get nominalStepS(): number {
+    const n = this.times.length;
+    return n > 1 ? (this.end - this.start) / (n - 1) : 0;
+  }
+
+  /**
+   * Points along the trajectory between two times, resampled at a uniform step with `stateAt` so a
+   * polyline through them follows the orbit instead of cutting chords between the stored samples
+   * (a 120 s chord at orbital speed bends 8° at every vertex, which a close camera sees as a corner).
+   * Starts at the clipped start time, ends exactly at the clipped end time, never more than `maxPoints`.
+   */
+  pointsBetween(t0: number, t1: number, opts: { stepS?: number; maxPoints?: number } = {}): { t: number; p: Vec3 }[] {
     if (!this.times.length) return [];
     const a = Math.max(t0, this.start);
     const b = Math.min(t1, this.end);
     if (b <= a) return [];
+    const maxPoints = Math.max(2, opts.maxPoints ?? 2000);
+    const step = Math.max(opts.stepS ?? this.nominalStepS, (b - a) / (maxPoints - 1), 1e-3);
     const out: { t: number; p: Vec3 }[] = [];
-    const first = this.stateAt(a);
-    if (first) out.push({ t: a, p: first.p });
-    let i = this.indexBefore(a) + 1;
-    const stride = Math.max(1, Math.ceil((this.indexBefore(b) - i) / maxPoints));
-    for (; i < this.times.length && this.times[i] < b; i += stride) {
-      out.push({ t: this.times[i], p: this.sampleAt(i).p });
+    for (let t = a; t < b - step * 1e-6; t += step) {
+      const st = this.stateAt(t);
+      if (st) out.push({ t, p: st.p });
     }
     const last = this.stateAt(b);
     if (last) out.push({ t: b, p: last.p });

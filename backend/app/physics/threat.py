@@ -46,14 +46,22 @@ def evaluate_threat_state(miss_distance_km: float, pc: Optional[Any],
     return "MONITORING", rationale
 
 
-def meets_mitigation_target(miss_distance_km: float, pc: Optional[Any],
-                            settings: Optional[Settings] = None) -> Tuple[bool, str]:
-    """Whether a (post-maneuver) encounter satisfies the configured demo target."""
+def meets_mitigation_target(miss_distance_km: float, pc: Optional[Any], settings: Optional[Settings] = None,
+                            require_distance: bool = False) -> Tuple[bool, str]:
+    """Whether a (post-maneuver) encounter satisfies the configured demo target.
+
+    With ``require_distance`` the distance target must hold as well as the probability target (the
+    sandbox profile: a burn is only good if the junk also passes at least the target distance away)."""
     s = settings or get_settings()
     if pc is not None and pc.status == "COMPUTED" and pc.value is not None:
         ok = pc.value <= s.pc_mitigation_target
-        return ok, (f"Pc {pc.value:.2e} {'<=' if ok else '>'} target {s.pc_mitigation_target:.0e} "
-                    f"(covariance basis: {pc.covariance_basis})")
+        text = (f"Pc {pc.value:.2e} {'<=' if ok else '>'} target {s.pc_mitigation_target:.0e} "
+                f"(covariance basis: {pc.covariance_basis})")
+        if require_distance:
+            ok_d = miss_distance_km >= s.miss_distance_target_km
+            return ok and ok_d, (text + f"; miss {miss_distance_km:.2f} km {'>=' if ok_d else '<'} "
+                                        f"{s.miss_distance_target_km:g} km (both required)")
+        return ok, text
     ok = miss_distance_km >= s.miss_distance_target_km
     return ok, (f"no covariance: distance-based target, miss {miss_distance_km:.2f} km "
                 f"{'>=' if ok else '<'} {s.miss_distance_target_km:g} km")
@@ -74,5 +82,6 @@ def thresholds_summary(settings: Optional[Settings] = None) -> Dict[str, Any]:
         "pc_critical_threshold": s.pc_critical_threshold,
         "pc_mitigation_target": s.pc_mitigation_target,
         "miss_distance_target_km": s.miss_distance_target_km,
+        "sandbox_requires_distance_target": s.sandbox_require_distance_target,
         "note": "Demonstration thresholds configured for this simulator; not universal safety standards.",
     }

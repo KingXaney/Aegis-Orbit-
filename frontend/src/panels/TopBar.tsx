@@ -1,6 +1,11 @@
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Button, Spinner, ThreatBadge } from '../components/ui';
 import { formatUtc } from '../lib/format';
+import type { ScenarioKind } from '../types/api';
+
+// Home A / B / C in the scenario menu: the real ISS flow, the scripted synthetic conjunction, the live sandbox.
+const SCENARIO_LETTER: Record<ScenarioKind, string> = { real: 'A', synthetic: 'B', sandbox: 'C' };
+const KIND_BADGE: Record<ScenarioKind, string> = { real: 'real GP data', synthetic: 'synthetic', sandbox: 'sandbox · live' };
 
 export default function TopBar() {
   const scenarios = useAppStore((s) => s.scenarios);
@@ -39,8 +44,7 @@ export default function TopBar() {
             {scenarios.length === 0 && <option value={scenarioId}>{scenarioId}</option>}
             {scenarios.map((s) => (
               <option key={s.scenario_id} value={s.scenario_id}>
-                {s.kind === 'real' ? 'A · ' : 'B · '}
-                {s.name}
+                {SCENARIO_LETTER[s.kind] ?? '·'} · {s.name}
               </option>
             ))}
           </select>
@@ -55,7 +59,7 @@ export default function TopBar() {
       {scenario && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-line bg-panel/85 px-3 py-1.5 text-[11px] text-muted backdrop-blur">
           <ThreatBadge state={simulation?.overall_threat_state} />
-          <Badge tone={scenario.kind === 'real' ? 'info' : 'neutral'}>{scenario.kind === 'real' ? 'real GP data' : 'synthetic'}</Badge>
+          <Badge tone={scenario.kind === 'real' ? 'info' : scenario.kind === 'sandbox' ? 'safe' : 'neutral'}>{KIND_BADGE[scenario.kind] ?? scenario.kind}</Badge>
           <span className="truncate">
             Primary <span className="mono text-text">{scenario.primary_id}</span> · {scenario.object_count} objects
           </span>

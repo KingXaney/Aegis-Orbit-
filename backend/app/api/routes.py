@@ -13,13 +13,15 @@ from ..config import get_settings
 from ..data import celestrak, explorer_catalog
 from ..scenarios.registry import list_scenarios
 from ..schemas.models import (AgentAnalyzeRequest, AgentRunResponse, ApproachesResponse, ApproveRequest,
-                              CatalogRefreshResponse,
+                              AutopilotRequest, CatalogRefreshResponse, EvaluateRequest, EvaluateResponse,
+                              JunkTypesResponse, RemoveRequest, RemoveResponse, SpawnBatchResponse, SpawnRandomRequest,
+                              SpawnRequest, SpawnResponse,
                               CatalogResponse, DataRefreshResponse,
                               DecisionResponse, HealthResponse, ObjectDetail, ObjectListResponse, PerceptionModelInfo,
                               PerceptionResponse, PlanRequest, PlanResponse, RejectRequest, ScenarioDetail, ScenarioSummary, ScreenRequest,
                               ScreenResponse, SecondaryCheckRequest, SecondaryCheckResponse, SimulationState,
                               TrajectoryBatchRequest, TrajectoryBatchResponse, TrajectoryResponse)
-from ..simulation import explorer_screening, service
+from ..simulation import explorer_screening, sandbox, service
 from ..simulation.session import get_store
 
 router = APIRouter(prefix="/api")
@@ -94,15 +96,18 @@ def object_detail(object_id: str, scenario_id: str = Query(...), at: Optional[st
 @router.get("/objects/{object_id}/trajectory", response_model=TrajectoryResponse)
 def object_trajectory(object_id: str, scenario_id: str = Query(...), start: Optional[str] = None,
                       end: Optional[str] = None, step_s: float = Query(default=60.0, ge=1.0, le=3600.0),
-                      maneuver_id: Optional[str] = None):
-    return _call(service.trajectory, _session(scenario_id), object_id, start, end, step_s, maneuver_id)
+                      maneuver_id: Optional[str] = None,
+                      variant: Optional[str] = Query(default=None, description="committed (default) | original")):
+    """The primary's default trajectory includes its committed burns; `variant=original` leaves them out."""
+    return _call(service.trajectory, _session(scenario_id), object_id, start, end, step_s, maneuver_id, variant)
 
 
 @router.post("/objects/trajectories", response_model=TrajectoryBatchResponse)
 def object_trajectories(req: TrajectoryBatchRequest):
     if len(req.object_ids) > 200:
         raise HTTPException(status_code=400, detail="at most 200 objects per batch request")
-    return _call(service.trajectories, _session(req.scenario_id), req.object_ids, req.start, req.end, req.step_s)
+    return _call(service.trajectories, _session(req.scenario_id), req.object_ids, req.start, req.end, req.step_s,
+                 req.variant)
 
 
 @router.post("/conjunctions/screen", response_model=ScreenResponse)
@@ -156,10 +161,11 @@ def perception(scenario_id: str = Query(...),
                critical_radius_km: Optional[float] = Query(default=None, gt=0, le=100),
                tracked_radius_km: Optional[float] = Query(default=None, gt=0, le=200),
                maneuver_id: Optional[str] = None, include_hidden: bool = False, trails: bool = True,
-               baseline: bool = Query(default=False, description="perceive along the original trajectory even after an approval")):
+               baseline: bool = Query(default=False, description="perceive along the original trajectory even after an approval"),
+               start: Optional[str] = Query(default=None, description="measure the horizon from this time (ISO 8601) instead of the window start")):
     """ML-ranked, physics-verified objects around the primary (the Waymo-style perception layer)."""
     return _call(service.perception, _session(scenario_id), horizon_s, critical_radius_km, tracked_radius_km,
-                 maneuver_id, include_hidden, trails, baseline)
+                 maneuver_id, include_hidden, trails, baseline, start)
 
 
 @router.get("/perception/model", response_model=PerceptionModelInfo)
@@ -180,6 +186,57 @@ def approve(req: ApproveRequest):
 @router.post("/simulation/reject", response_model=DecisionResponse)
 def reject(req: RejectRequest):
     return _call(service.reject, _session(req.scenario_id), req.maneuver_id, req.reason)
+
+
+@router.post("/simulation/autopilot", response_model=SimulationState)
+def autopilot(req: AutopilotRequest):
+    """Sandbox only: let the simulation commit avoidance burns itself (off: burns wait for approval)."""
+    return _call(service.set_autopilot, _session(req.scenario_id), req.enabled)
+
+
+@router.get("/sandbox/junk-types", response_model=JunkTypesResponse)
+def sandbox_junk_types():
+    """The junk kinds the sandbox can spawn, with their miss-distance bands and designs."""
+    return sandbox.junk_types()
+
+
+def _now(sess, value: str) -> float:
+    return _call(service._parse_time, value, sess.scenario.start_unix)
+
+
+@router.post("/sandbox/spawn", response_model=SpawnResponse)
+def sandbox_spawn(req: SpawnRequest):
+    """Sandbox only: spawn one junk object whose closest approach to the primary follows the request or its kind's band."""
+    sess = _session(req.scenario_id)
+    drop = None
+    if req.drop_point is not None:
+        if "lat_deg" not in req.drop_point or "lon_deg" not in req.drop_point:
+            raise HTTPException(status_code=400, detail="drop_point needs lat_deg and lon_deg")
+        drop = (float(req.drop_point["lat_deg"]), float(req.drop_point["lon_deg"]))
+    spec = sandbox.SpawnSpec(kind=req.kind, time_to_tca_s=req.time_to_tca_s, drop_point=drop, offset_km=req.offset_km,
+                             axis=req.axis, crossing_angle_deg=req.crossing_angle_deg, seed=req.seed, name=req.name)
+    return _call(sandbox.spawn, sess, _now(sess, req.now), spec)
+
+
+@router.post("/sandbox/spawn_random", response_model=SpawnBatchResponse)
+def sandbox_spawn_random(req: SpawnRandomRequest):
+    """Sandbox only: spawn several junk objects of mixed kinds spread over the next two orbits."""
+    sess = _session(req.scenario_id)
+    return _call(sandbox.spawn_random, sess, _now(sess, req.now), req.count, req.seed)
+
+
+@router.post("/sandbox/remove", response_model=RemoveResponse)
+def sandbox_remove(req: RemoveRequest):
+    """Sandbox only: take spawned junk away (specific ids, or the most recently spawned `count`)."""
+    sess = _session(req.scenario_id)
+    return _call(sandbox.remove, sess, _now(sess, req.now), req.object_ids, req.count)
+
+
+@router.post("/sandbox/evaluate", response_model=EvaluateResponse)
+def sandbox_evaluate(req: EvaluateRequest):
+    """Sandbox only: screen from `now` and let the autopilot plan, check and commit burns for passes that need mitigation."""
+    sess = _session(req.scenario_id)
+    return _call(sandbox.evaluate, sess, _now(sess, req.now), req.earliest_burn_after_s)
 
 
 @router.post("/data/refresh", response_model=DataRefreshResponse)

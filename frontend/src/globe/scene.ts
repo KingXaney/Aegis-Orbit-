@@ -1,12 +1,13 @@
 import * as Cesium from 'cesium';
-import { SampledTrajectory } from '../simulation/trajectory';
+import { SampledTrajectory, type Vec3 } from '../simulation/trajectory';
 import { buildEarthTexture } from '../explorer/earthTexture';
 import { readPalette } from '../explorer/palette';
 import type { SimulationController } from '../simulation/controller';
-import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, Trajectory } from '../types/api';
-import { TimeBridge, temeToFixed, temeVelocityToFixed } from './frames';
+import type { Conjunction, Maneuver, ObjectSummary, ScenarioDetail, ScreenResponse, ThreatState, Trajectory } from '../types/api';
+import { TimeBridge, temeToFixed, temeToFixedMatrix, temeVelocityToFixed } from './frames';
 import { SpacecraftModel } from './spacecraft';
 import { addDetectionRadius } from './detectionRadius';
+import { INITIAL_PLUME, advancePlume, plumeIntensity, type BurnRef, type PlumeState } from './thrusters';
 
 export interface LayerFlags {
   original: boolean;
@@ -21,11 +22,19 @@ export interface LayerFlags {
 
 export interface SceneCallbacks {
   onPick: (kind: 'object' | 'candidate' | null, id: string | null) => void;
+  /** A committed burn started (`{ maneuverId }`) or stopped (`null`) firing. */
+  onBurnFiring?: (info: { maneuverId: string } | null) => void;
 }
 
 export interface SceneOptions {
   /** A small picture-in-picture view: fewer pixels and frames, a coarser Earth, no camera input. */
   inset?: boolean;
+}
+
+/** The primary's path before its latest committed burn, kept as the dashed original for comparison. */
+export interface PreviousPath {
+  trajectory: Trajectory;
+  replacedAtBurnUnix: number;
 }
 
 // Path colours: a glowing teal band for the path the spacecraft will fly, dashed cyan for the original
@@ -34,23 +43,67 @@ const COLORS = {
   primary: Cesium.Color.fromCssColorString('#67e8f9'),
   planned: Cesium.Color.fromCssColorString('#2dd4bf'),
   tracked: Cesium.Color.fromCssColorString('#93c5fd'),
+  monitoring: Cesium.Color.fromCssColorString('#60a5fa'),
   debris: Cesium.Color.fromCssColorString('#cbd5e1'),
   threat: Cesium.Color.fromCssColorString('#f87171'),
+  warn: Cesium.Color.fromCssColorString('#fbbf24'),
   candidate: Cesium.Color.fromCssColorString('#4ade80'),
   approved: Cesium.Color.fromCssColorString('#22c55e'),
   burn: Cesium.Color.fromCssColorString('#a3e635'),
   label: Cesium.Color.fromCssColorString('#d7e1f2'),
 };
 
-// The camera always tracks the primary, starting close enough to see its true-scale model (a few
-// envelope radii away, see defaultViewFrom); the zoom floor lets it reach the model itself.
+/**
+ * World: the camera hangs still in the inertial (TEME) frame, far enough to see the whole Earth, which
+ * turns beneath the spacecraft's orbit as the clock runs; drag looks around the Earth. Follow: the
+ * camera tracks the primary from a few envelope radii, so its true-scale model is in view.
+ */
+export type CameraMode = 'world' | 'follow';
+const WORLD_RANGE_M = 21_000_000; // from the Earth's centre: the globe spans about half of the view
+const WORLD_MIN_ZOOM_M = 7_000_000; // zooming toward the centre stops above the surface
+// Follow's zoom floor lets the camera reach the model itself.
 const MIN_ZOOM_M = 2;
 // Tracking offset (metres, entity-local frame) for a primary whose model is not available yet.
 const FALLBACK_VIEW_FROM = new Cesium.Cartesian3(-60, 35, 25);
+const POINT_OUTLINE = Cesium.Color.fromCssColorString('#05080f');
 // Paths look half an orbit ahead: a full orbit closes into a loop whose near and far sides read as two
 // lines on screen. The past trail is a short tail for the same reason.
 const AHEAD_ORBITS = 0.5;
 const TRAIL_ORBITS = 1 / 12;
+// Close views (the camera within this distance of the primary) draw the bright band only for the next
+// NEAR_BAND_S of flight and the rest of the path as a thin line: from a few hundred metres away the
+// orbit ahead runs into its vanishing point, where a wide band reads as a sharp corner.
+const CLOSE_VIEW_M = 20_000;
+const NEAR_BAND_S = 60;
+// Path polylines are resampled to this many vertices per orbit (0.5° of arc) so chords never show.
+const PATH_VERTICES_PER_ORBIT = 720;
+// Sandbox junk within this range of the spacecraft is drawn enlarged until it spans JUNK_MIN_PIXELS on
+// screen (true-scale junk is a few metres across and would be invisible at a 5 km pass); the label
+// states the true size, the distance and the enlargement.
+const JUNK_BOOST_RANGE_M = 30_000;
+const JUNK_MIN_PIXELS = 24;
+const JUNK_MAX_BOOST = 400;
+// A pass is over this long after its closest approach: its markers go and it stops colouring its object.
+const PASS_DONE_S = 90;
+const DV_ARROW_LINGER_MS = 4000;
+const THREAT_ORDER: ThreatState[] = ['NORMAL', 'MONITORING', 'UNVERIFIED', 'ELEVATED', 'CRITICAL', 'MITIGATED'];
+
+/** A unit vector in TEME for a direction given in the RTN frame of state (p, v). */
+function rtnDirectionTeme(p: Vec3, v: Vec3, rtn: number[]): Vec3 {
+  const norm = (a: Vec3): Vec3 => {
+    const n = Math.hypot(a[0], a[1], a[2]);
+    return n > 0 ? [a[0] / n, a[1] / n, a[2] / n] : [0, 0, 0];
+  };
+  const R = norm(p);
+  const N = norm([p[1] * v[2] - p[2] * v[1], p[2] * v[0] - p[0] * v[2], p[0] * v[1] - p[1] * v[0]]);
+  const T: Vec3 = [N[1] * R[2] - N[2] * R[1], N[2] * R[0] - N[0] * R[2], N[0] * R[1] - N[1] * R[0]];
+  const d: Vec3 = [
+    R[0] * rtn[0] + T[0] * rtn[1] + N[0] * rtn[2],
+    R[1] * rtn[0] + T[1] * rtn[1] + N[1] * rtn[2],
+    R[2] * rtn[0] + T[2] * rtn[1] + N[2] * rtn[2],
+  ];
+  return norm(d);
+}
 
 const SATELLITE_SVG = encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
@@ -68,39 +121,88 @@ function objectColor(o: ObjectSummary): Cesium.Color {
   return COLORS.tracked;
 }
 
+/** The burn flare: a soft radial glow drawn as a billboard at the burn point (visible from the World view). */
+function flareImage(): HTMLCanvasElement {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    g.addColorStop(0, 'rgba(247, 254, 231, 1)');
+    g.addColorStop(0.25, 'rgba(163, 230, 53, 0.9)');
+    g.addColorStop(0.6, 'rgba(163, 230, 53, 0.25)');
+    g.addColorStop(1, 'rgba(163, 230, 53, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+  }
+  return canvas;
+}
+
 export class GlobeScene {
   readonly viewer: Cesium.Viewer;
   private readonly controller: SimulationController;
   private readonly callbacks: SceneCallbacks;
   private bridge = new TimeBridge(0);
+  private detail: ScenarioDetail | null = null;
+  /** The store's trajectory records, to notice when one is replaced (rolling data, committed burns). */
+  private records = new Map<string, Trajectory>();
   private trajectories = new Map<string, SampledTrajectory>();
   private objects = new Map<string, ObjectSummary>();
   private objectEntities = new Map<string, Cesium.Entity>();
-  private objectPaths = new Map<string, Cesium.Entity>();
+  private objectPaths = new Map<string, Cesium.Entity[]>();
   private primaryId: string | null = null;
   private primaryEntity: Cesium.Entity | null = null;
   private periodS = 5600;
+  /** The primary's TEME state as of the last frame (labels and markers read it; a frame of lag is fine). */
+  private primaryStateNow: { p: Vec3; v: Vec3 } | null = null;
   private conjunction: Conjunction | null = null;
   private conjunctionEntities: Cesium.Entity[] = [];
   private candidateEntities = new Map<string, Cesium.Entity[]>();
   private candidateTrajectories = new Map<string, SampledTrajectory>();
   private candidates: Maneuver[] = [];
-  private approvedCandidateId: string | null = null;
+  private committed: Maneuver[] = [];
+  private committedEntities: Cesium.Entity[] = [];
+  private burnRefs: BurnRef[] = [];
+  private previousPrimary: SampledTrajectory | null = null;
+  private previousReplacedAt = 0;
+  /** Screened passes per secondary (state and closest-approach time); past passes stop colouring an object. */
+  private threats: { id: string; state: ThreatState; tcaUnix: number }[] = [];
   private layers: LayerFlags = { original: true, secondary: true, candidates: true, background: true, backgroundOrbits: false, markers: true, detection: true, labels: true };
   private handler: Cesium.ScreenSpaceEventHandler;
   private preUpdateRemover: Cesium.Event.RemoveCallback;
+  private postUpdateRemover: Cesium.Event.RemoveCallback;
   private postRenderRemover: Cesium.Event.RemoveCallback;
+  private cameraMode: CameraMode = 'world';
+  /** Set when the world view is (re)framed: the camera offset (TEME, metres) to apply on the next frame. */
+  private pendingWorldOffset: Cesium.Cartesian3 | null = null;
+  private readonly worldRotation = new Cesium.Matrix3();
+  private readonly worldTransform = new Cesium.Matrix4();
+  private readonly worldOffset = new Cesium.Cartesian3();
   private destroyed = false;
-  /** True-scale models for the primary, highlighted objects and the current threat object. */
-  private models = new Map<string, { model: SpacecraftModel; traj: SampledTrajectory }>();
+  /** The corner close-up (see SceneOptions). */
+  private readonly inset: boolean;
+  /** True-scale models for the primary, highlighted objects, spawned junk and the current threat object. */
+  private models = new Map<string, SpacecraftModel>();
   private conjunctionModelId: string | null = null;
   private scratchPos = new Cesium.Cartesian3();
   private scratchVel = new Cesium.Cartesian3();
   private earthTextureUrl: string | null = null;
+  /** Camera within CLOSE_VIEW_M of the primary this frame (see the band styling constants). */
+  private closeView = false;
+  private readonly primaryFixed = new Cesium.Cartesian3();
+  private plume: PlumeState = INITIAL_PLUME;
+  private reportedBurnId: string | null = null;
+  /** The burn that fired last and when it stopped (the delta-v arrow lingers a moment after the plume). */
+  private lastFired: { id: string; endedMs: number } | null = null;
+  private flare: HTMLCanvasElement | null = null;
+  private readonly labelCache = new Map<string, string>();
 
   constructor(container: HTMLElement, controller: SimulationController, callbacks: SceneCallbacks, ionToken?: string, options: SceneOptions = {}) {
     this.controller = controller;
     this.callbacks = callbacks;
+    this.inset = !!options.inset;
     if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
     // The globe looks like the home page's: the same vector-drawn Earth (dark ocean, slate land, thin
     // coastlines, faint graticule), evenly lit, no atmosphere or star field, so the objects carry the
@@ -144,7 +246,13 @@ export class GlobeScene {
     if (options.inset) {
       this.viewer.resolutionScale = 0.75;
       this.viewer.targetFrameRate = 30;
-      scene.screenSpaceCameraController.enableInputs = false;
+      // the close-up orbits the spacecraft (drag) and zooms (wheel, pinch, the +/- buttons) but never leaves it
+      const input = scene.screenSpaceCameraController;
+      input.enableRotate = true;
+      input.enableTilt = true;
+      input.enableZoom = true;
+      input.enableTranslate = false;
+      input.enableLook = false;
     }
     this.viewer.clock.shouldAnimate = false;
     this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
@@ -154,18 +262,16 @@ export class GlobeScene {
     // rendered in a frame (entities, polylines, the spacecraft primitives, the tracked camera)
     // uses the same clock time.
     this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
-    this.preUpdateRemover = scene.preUpdate.addEventListener(() => {
-      const time = this.viewer.clock.currentTime;
-      const unix = this.bridge.toUnix(time);
-      for (const { model, traj } of this.models.values()) {
-        const st = traj.stateAt(unix);
-        if (st) {
-          const pos = temeToFixed(time, st.p, this.scratchPos);
-          model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel));
-        } else {
-          model.hide();
-        }
-      }
+    this.preUpdateRemover = scene.preUpdate.addEventListener(() => this.onPreUpdate());
+    // World view: re-anchor the camera to the inertial frame every frame, so it stays put while the
+    // Earth-fixed globe turns; the camera's own position (in that frame) carries the user's rotation and zoom.
+    this.postUpdateRemover = scene.postUpdate.addEventListener(() => {
+      if (this.destroyed || this.cameraMode !== 'world') return;
+      const rotation = temeToFixedMatrix(this.viewer.clock.currentTime, this.worldRotation);
+      const offset = this.pendingWorldOffset ?? Cesium.Cartesian3.clone(this.viewer.camera.position, this.worldOffset);
+      this.pendingWorldOffset = null;
+      Cesium.Matrix4.fromRotationTranslation(rotation, Cesium.Cartesian3.ZERO, this.worldTransform);
+      this.viewer.camera.lookAtTransform(this.worldTransform, offset);
     });
     this.postRenderRemover = scene.postRender.addEventListener(() => {
       this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
@@ -213,15 +319,55 @@ export class GlobeScene {
     }
   }
 
+  // ------------------------------------------------------------------ per frame
+  private onPreUpdate(): void {
+    const time = this.viewer.clock.currentTime;
+    const unix = this.bridge.toUnix(time);
+    const camera = this.viewer.camera.positionWC;
+    const primaryTraj = this.primaryId ? this.trajectories.get(this.primaryId) : undefined;
+    const primaryState = primaryTraj?.stateAt(unix) ?? null;
+    this.primaryStateNow = primaryState;
+    const primaryFixed = primaryState ? temeToFixed(time, primaryState.p, this.primaryFixed) : null;
+    this.closeView = !!primaryFixed && Cesium.Cartesian3.distance(camera, primaryFixed) < CLOSE_VIEW_M;
+    for (const [id, model] of this.models) {
+      const st = this.trajectories.get(id)?.stateAt(unix);
+      if (!st) {
+        model.hide();
+        continue;
+      }
+      const pos = temeToFixed(time, st.p, this.scratchPos);
+      let scale = 1;
+      const obj = this.objects.get(id);
+      if (obj?.spawned_at_unix != null && id !== this.primaryId && primaryFixed && Cesium.Cartesian3.distance(pos, primaryFixed) < JUNK_BOOST_RANGE_M) {
+        scale = model.boostFor(Cesium.Cartesian3.distance(camera, pos), JUNK_MIN_PIXELS, JUNK_MAX_BOOST);
+      }
+      model.update(pos, temeVelocityToFixed(time, st.v, pos, this.scratchVel), scale);
+    }
+    // the primary's thrusters: a plume while a committed burn fires, a faint glow just before
+    const realNow = performance.now();
+    this.plume = advancePlume(this.plume, { nowUnix: unix, speed: this.controller.speed, playing: this.controller.playing, realNowMs: realNow, burns: this.burnRefs });
+    const primaryModel = this.primaryId ? this.models.get(this.primaryId) : undefined;
+    // a little flicker makes the plume read as exhaust rather than a lit cone
+    const flicker = 0.82 + 0.18 * (0.5 + 0.5 * Math.sin(realNow * 0.045));
+    primaryModel?.setPlume(this.plume.active?.face ?? this.plume.preGlow?.face ?? null, plumeIntensity(this.plume, realNow) * flicker);
+    const firing = this.plume.active?.id ?? null;
+    if (firing !== this.reportedBurnId) {
+      if (this.reportedBurnId) this.lastFired = { id: this.reportedBurnId, endedMs: realNow };
+      this.reportedBurnId = firing;
+      if (!this.inset) this.callbacks.onBurnFiring?.(firing ? { maneuverId: firing } : null);
+    }
+  }
+
   // ------------------------------------------------------------------ helpers
   private unixOf(time: Cesium.JulianDate | undefined): number {
     return time ? this.bridge.toUnix(time) : this.controller.currentUnix;
   }
 
-  private positionProperty(traj: SampledTrajectory): Cesium.CallbackPositionProperty {
+  private positionProperty(objectId: string): Cesium.CallbackPositionProperty {
     return new Cesium.CallbackPositionProperty((time, result) => {
-      const p = traj.positionAt(this.unixOf(time));
-      if (!p) return undefined;
+      const p = this.trajectories.get(objectId)?.positionAt(this.unixOf(time));
+      // a NaN position would stop Cesium's render loop for good; no position is a skipped frame
+      if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return undefined;
       return temeToFixed(time ?? this.bridge.toJulian(this.controller.currentUnix), p, result);
     }, false, Cesium.ReferenceFrame.FIXED);
   }
@@ -232,23 +378,47 @@ export class GlobeScene {
     }, false, Cesium.ReferenceFrame.FIXED);
   }
 
-  /** Polyline positions for a time span of a trajectory, re-rotated into the fixed frame each frame. */
+  /** Polyline positions for a time span of a trajectory (looked up at evaluation), re-rotated into the fixed frame each frame. */
   private pathPositions(
-    traj: SampledTrajectory,
+    source: () => SampledTrajectory | undefined | null,
     span: (now: number) => [number, number] | null,
   ): Cesium.CallbackProperty {
     return new Cesium.CallbackProperty((time) => {
+      const traj = source();
+      if (!traj) return [];
       const now = this.unixOf(time);
       const s = span(now);
       if (!s) return [];
       const jd = time ?? this.bridge.toJulian(now);
-      const pts = traj.pointsBetween(s[0], s[1], 1200);
+      const pts = traj.pointsBetween(s[0], s[1], { stepS: this.pathStepS(), maxPoints: 1200 });
       if (pts.length < 2) return [];
       return pts.map((pt) => temeToFixed(jd, pt.p));
     }, false);
   }
 
-  private dash(color: Cesium.Color, gap = 12): Cesium.PolylineDashMaterialProperty {
+  private trajectoryOf(objectId: string): () => SampledTrajectory | undefined {
+    return () => this.trajectories.get(objectId);
+  }
+
+  /** Resampling step for path polylines: half a degree of orbit per vertex, between 2 s and 60 s. */
+  private pathStepS(): number {
+    return Math.min(60, Math.max(2, this.periodS / PATH_VERTICES_PER_ORBIT));
+  }
+
+  /** The bright part of a band: the whole span, or only the next NEAR_BAND_S in a close view. */
+  private nearSpan(now: number, start: number, end: number): [number, number] | null {
+    const e = this.closeView ? Math.min(end, Math.max(start, now + NEAR_BAND_S)) : end;
+    return start < e ? [start, e] : null;
+  }
+
+  /** The thin continuation of a band in a close view (nothing in far views). */
+  private farSpan(now: number, start: number, end: number): [number, number] | null {
+    if (!this.closeView) return null;
+    const s = Math.max(start, now + NEAR_BAND_S);
+    return s < end ? [s, end] : null;
+  }
+
+  private dash(color: Cesium.Color | Cesium.Property, gap = 12): Cesium.PolylineDashMaterialProperty {
     return new Cesium.PolylineDashMaterialProperty({ color, dashLength: gap, gapColor: Cesium.Color.TRANSPARENT });
   }
 
@@ -274,79 +444,165 @@ export class GlobeScene {
     };
   }
 
+  /** An object's colour: the worst state of its passes still ahead (or just behind), its category otherwise. */
+  private colorFor(objectId: string, base: Cesium.Color): Cesium.Color {
+    const now = this.controller.currentUnix;
+    let rank = -1;
+    for (const t of this.threats) {
+      if (t.id !== objectId || t.tcaUnix < now - PASS_DONE_S) continue;
+      const r = THREAT_ORDER.indexOf(t.state);
+      if (r > rank) rank = r;
+    }
+    const state = rank >= 0 ? THREAT_ORDER[rank] : null;
+    if (state === 'CRITICAL' || state === 'ELEVATED') return COLORS.threat;
+    if (state === 'UNVERIFIED') return COLORS.warn;
+    if (state === 'MONITORING') return COLORS.monitoring;
+    return base;
+  }
+
+  /** Spawned junk labels say what the eye cannot: true size, distance to the spacecraft, enlargement. */
+  private junkLabel(obj: ObjectSummary): string {
+    const id = obj.object_id;
+    const sizeM = Math.max(obj.design.length_m, obj.design.width_m, obj.design.height_m);
+    const st = this.trajectories.get(id)?.stateAt(this.controller.currentUnix);
+    const p = this.primaryStateNow;
+    const distKm = st && p ? Math.hypot(st.p[0] - p.p[0], st.p[1] - p.p[1], st.p[2] - p.p[2]) : null;
+    const boost = this.models.get(id)?.displayScale ?? 1;
+    const key = `${distKm === null ? '-' : distKm < 100 ? distKm.toFixed(1) : Math.round(distKm)}|${boost > 1.05 ? Math.round(boost) : 1}`;
+    const cached = this.labelCache.get(id);
+    if (cached && cached.startsWith(key + '\u0000')) return cached.slice(key.length + 1);
+    const text = `${obj.name} · ${sizeM.toFixed(1)} m` + (distKm === null ? '' : ` · ${distKm < 100 ? `${distKm.toFixed(1)} km` : `${Math.round(distKm)} km`} away`) + (boost > 1.05 ? ` · drawn ×${Math.round(boost)}` : '');
+    this.labelCache.set(id, key + '\u0000' + text);
+    return text;
+  }
+
   // ------------------------------------------------------------------ scenario
-  setScenario(detail: ScenarioDetail, objects: ObjectSummary[], trajectories: Trajectory[]): void {
+  /** Start a scenario: clears everything; objects arrive through updateTrajectories. */
+  setScenario(detail: ScenarioDetail): void {
     this.clearScenario();
+    this.detail = detail;
     this.bridge = new TimeBridge(detail.window.start_unix);
     this.viewer.clock.currentTime = this.bridge.toJulian(this.controller.currentUnix, this.viewer.clock.currentTime);
     this.primaryId = detail.primary_id;
-    for (const o of objects) this.objects.set(o.object_id, o);
-    for (const t of trajectories) this.trajectories.set(t.object_id, new SampledTrajectory(t));
-    const primary = this.objects.get(detail.primary_id);
-    this.periodS = primary?.period_s ?? 5600;
-
-    for (const t of trajectories) {
-      const traj = this.trajectories.get(t.object_id)!;
-      const obj = this.objects.get(t.object_id);
-      if (!obj || traj.length === 0) continue;
-      const isPrimary = t.object_id === detail.primary_id;
-      const isHighlight = detail.highlight_object_ids.includes(t.object_id);
-      const color = isPrimary ? COLORS.primary : isHighlight ? COLORS.threat : objectColor(obj);
-      const pos = this.positionProperty(traj);
-      const entity = this.viewer.entities.add({
-        id: `obj:${t.object_id}`,
-        name: obj.name,
-        position: pos,
-        point: {
-          pixelSize: isPrimary ? 9 : isHighlight ? 7 : 5,
-          color,
-          outlineColor: Cesium.Color.fromCssColorString('#05080f'),
-          outlineWidth: 1.5,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          show: new Cesium.CallbackProperty(() => (isPrimary || isHighlight || this.layers.background) && !this.modelShown(t.object_id), false),
-        },
-        label: this.labelGraphics(obj.name, color, isPrimary ? -22 : -12),
-      });
-      if (!isPrimary && !isHighlight) {
-        // background labels only when close enough to matter
-        entity.label!.distanceDisplayCondition = new Cesium.ConstantProperty(new Cesium.DistanceDisplayCondition(0, 3.5e6));
-        entity.label!.show = new Cesium.CallbackProperty(() => this.layers.labels && this.layers.background, false);
-      }
-      this.objectEntities.set(t.object_id, entity);
-
-      if (isPrimary || isHighlight) this.addModel(obj, traj);
-      if (isPrimary) {
-        entity.viewFrom = this.defaultViewFrom();
-        this.primaryEntity = entity;
-        this.addPrimaryIcon(pos);
-        addDetectionRadius(this.viewer.entities, { primary: entity, thresholds: detail.thresholds, objects: () => this.objectEntities.values(), show: () => this.layers.detection, showLabels: () => this.layers.labels });
-        this.addPrimaryPath(traj);
-      } else {
-        this.addObjectPath(t.object_id, traj, color, isHighlight);
-      }
-    }
-    this.trackPrimary();
   }
 
-  private addModel(obj: ObjectSummary, traj: SampledTrajectory): void {
+  /**
+   * Bring the drawn objects in line with the store: new ids get entities (and models where they
+   * matter), replaced records take effect on the next frame, missing ids disappear.
+   */
+  updateTrajectories(records: Record<string, Trajectory>, objects: Record<string, ObjectSummary>): void {
+    if (!this.detail) return;
+    for (const [id, o] of Object.entries(objects)) this.objects.set(id, o);
+    const primary = this.primaryId ? this.objects.get(this.primaryId) : undefined;
+    this.periodS = primary?.period_s ?? 5600;
+    for (const id of [...this.records.keys()]) if (!(id in records)) this.removeObject(id);
+    let primaryAdded = false;
+    for (const [id, t] of Object.entries(records)) {
+      const obj = this.objects.get(id);
+      if (!obj) continue;
+      const prev = this.records.get(id);
+      if (prev === t) continue;
+      this.records.set(id, t);
+      this.trajectories.set(id, new SampledTrajectory(t));
+      if (!prev) {
+        this.addObject(obj);
+        if (id === this.primaryId) primaryAdded = true;
+      }
+    }
+    if (primaryAdded) this.applyCameraMode();
+  }
+
+  private addObject(obj: ObjectSummary): void {
+    const detail = this.detail!;
+    const id = obj.object_id;
+    const isPrimary = id === this.primaryId;
+    const isHighlight = detail.highlight_object_ids.includes(id);
+    const spawnedAt = obj.spawned_at_unix ?? null;
+    const baseColor = isPrimary ? COLORS.primary : isHighlight ? COLORS.threat : objectColor(obj);
+    const color = isPrimary ? baseColor : new Cesium.CallbackProperty(() => this.colorFor(id, baseColor), false);
+    const pos = this.positionProperty(id);
+    // spawned junk exists from its spawn time on (its trajectory starts there too)
+    const present = () => spawnedAt === null || this.controller.currentUnix >= spawnedAt;
+    const entity = this.viewer.entities.add({
+      id: `obj:${id}`,
+      name: obj.name,
+      position: pos,
+      // The primary's point never hides: Cesium moves a tracked camera only while the tracked entity
+      // has something to bound, and with labels off the point is all it has. Once the model takes
+      // over, the point turns transparent instead.
+      point: {
+        pixelSize: isPrimary ? 9 : isHighlight || spawnedAt !== null ? 7 : 5,
+        color: isPrimary ? new Cesium.CallbackProperty(() => (this.modelShown(id) ? Cesium.Color.TRANSPARENT : baseColor), false) : color,
+        outlineColor: isPrimary
+          ? new Cesium.CallbackProperty(() => (this.modelShown(id) ? Cesium.Color.TRANSPARENT : POINT_OUTLINE), false)
+          : POINT_OUTLINE,
+        outlineWidth: 1.5,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        show: new Cesium.CallbackProperty(() => isPrimary || (present() && (isHighlight || spawnedAt !== null || this.layers.background) && !this.modelShown(id)), false),
+      },
+      label: this.labelGraphics(obj.name, baseColor, isPrimary ? -22 : -12),
+    });
+    if (spawnedAt !== null) {
+      // junk gathers around the spacecraft's path; from the World view its labels would pile up there
+      entity.label!.text = new Cesium.CallbackProperty(() => this.junkLabel(obj), false);
+      entity.label!.fillColor = new Cesium.CallbackProperty(() => this.colorFor(id, COLORS.label), false);
+      entity.label!.distanceDisplayCondition = new Cesium.ConstantProperty(new Cesium.DistanceDisplayCondition(0, 3.0e6));
+      entity.label!.show = new Cesium.CallbackProperty(() => this.layers.labels && present(), false);
+    } else if (!isPrimary && !isHighlight) {
+      // background labels only when close enough to matter
+      entity.label!.distanceDisplayCondition = new Cesium.ConstantProperty(new Cesium.DistanceDisplayCondition(0, 3.5e6));
+      entity.label!.show = new Cesium.CallbackProperty(() => this.layers.labels && this.layers.background, false);
+    }
+    this.objectEntities.set(id, entity);
+
+    if (isPrimary || isHighlight || spawnedAt !== null) this.addModel(obj);
+    if (isPrimary) {
+      entity.viewFrom = this.defaultViewFrom();
+      this.primaryEntity = entity;
+      this.addPrimaryIcon(pos);
+      addDetectionRadius(this.viewer.entities, { primary: entity, thresholds: detail.thresholds, objects: () => this.objectEntities.values(), show: () => this.layers.detection, showLabels: () => this.layers.labels });
+      this.addPrimaryPath();
+    } else {
+      this.addObjectPath(id, baseColor, isHighlight, spawnedAt);
+    }
+  }
+
+  private removeObject(id: string): void {
+    const entity = this.objectEntities.get(id);
+    if (entity) this.viewer.entities.remove(entity);
+    for (const e of this.objectPaths.get(id) ?? []) this.viewer.entities.remove(e);
+    this.objectEntities.delete(id);
+    this.objectPaths.delete(id);
+    if (id !== this.primaryId) this.removeModel(id);
+    if (this.conjunctionModelId === id) this.conjunctionModelId = null;
+    this.records.delete(id);
+    this.trajectories.delete(id);
+    this.labelCache.delete(id);
+  }
+
+  private addModel(obj: ObjectSummary): void {
     if (this.models.has(obj.object_id) || !obj.design) return;
-    this.models.set(obj.object_id, { model: new SpacecraftModel(this.viewer.scene, obj.design), traj });
+    this.models.set(obj.object_id, new SpacecraftModel(this.viewer.scene, obj.design, { rcs: obj.object_id === this.primaryId }));
   }
 
   private removeModel(objectId: string): void {
-    this.models.get(objectId)?.model.destroy();
+    this.models.get(objectId)?.destroy();
     this.models.delete(objectId);
   }
 
   private modelShown(objectId: string): boolean {
-    return this.models.get(objectId)?.model.shown ?? false;
+    return this.models.get(objectId)?.shown ?? false;
   }
 
-  /** Default tracking offset: a few envelope radii from the primary, so its model fills a good part of the frame. */
+  /**
+   * Default tracking offset (Cesium frames it as along-velocity, orbit-normal, radial): a few envelope
+   * radii behind and above the primary, in its orbit plane, so the model fills a good part of the frame
+   * and the path ahead projects to one straight line through it rather than a corner at the horizon.
+   */
   private defaultViewFrom(): Cesium.Cartesian3 {
-    const r = this.primaryId ? this.models.get(this.primaryId)?.model.envelopeRadiusM : undefined;
+    const r = this.primaryId ? this.models.get(this.primaryId)?.envelopeRadiusM : undefined;
     if (!r) return FALLBACK_VIEW_FROM;
-    return new Cesium.Cartesian3(-4 * r, 2.2 * r, 1.6 * r);
+    return new Cesium.Cartesian3(-4 * r, 0, 1.6 * r);
   }
 
   private addPrimaryIcon(pos: Cesium.PositionProperty): void {
@@ -362,75 +618,91 @@ export class GlobeScene {
         show: new Cesium.CallbackProperty(() => !(this.primaryId && this.modelShown(this.primaryId)), false),
       },
     });
-    this.objectPaths.set('primary-icon', icon);
+    this.objectPaths.set('primary-icon', [icon]);
   }
 
-  private addPrimaryPath(traj: SampledTrajectory): void {
-    const ahead = this.periodS * AHEAD_ORBITS;
-    const tail = this.periodS * TRAIL_ORBITS;
-    const approvedBurn = (): number | null => {
-      const approved = this.approvedCandidateId ? this.candidateTrajectories.get(this.approvedCandidateId) : null;
-      return approved?.burnTimeUnix ?? null;
-    };
+  private addPrimaryPath(): void {
+    const id = this.primaryId!;
+    const source = this.trajectoryOf(id);
+    const ahead = () => this.periodS * AHEAD_ORBITS;
+    const tail = () => this.periodS * TRAIL_ORBITS;
+    const showOriginal = new Cesium.CallbackProperty(() => this.layers.original, false);
     // Past trail (solid, dim): a short tail behind the current time.
     const trail = this.viewer.entities.add({
       id: 'path:primary:past',
       polyline: {
-        positions: this.pathPositions(traj, (now) => [now - tail, now]),
+        positions: this.pathPositions(source, (now) => [now - tail(), now]),
         width: 1.5,
         material: COLORS.planned.withAlpha(0.3),
         arcType: Cesium.ArcType.NONE,
-        show: new Cesium.CallbackProperty(() => this.layers.original, false),
+        show: showOriginal,
       },
     });
-    // Planned path (the teal band): half an orbit ahead; with an approved burn ahead it
-    // stops at the burn, where the approved candidate's band takes over.
+    // Planned path (the teal band): half an orbit ahead along the trajectory the spacecraft will fly,
+    // committed burns included (the band bends at each burn).
     const planned = this.viewer.entities.add({
       id: 'path:primary:planned',
       polyline: {
-        positions: this.pathPositions(traj, (now) => {
-          const burn = approvedBurn();
-          if (burn !== null && now >= burn) return null;
-          return [now, burn !== null ? Math.min(now + ahead, burn) : now + ahead];
-        }),
+        positions: this.pathPositions(source, (now) => this.nearSpan(now, now, now + ahead())),
         width: 9,
         material: this.glow(COLORS.planned.withAlpha(0.95)),
         arcType: Cesium.ArcType.NONE,
-        show: new Cesium.CallbackProperty(() => this.layers.original, false),
+        show: showOriginal,
       },
     });
-    // Original path (dashed cyan): kept for comparison once the approved burn has happened.
+    // In close views the band beyond the next minute continues as a thin line (see CLOSE_VIEW_M).
+    const plannedFar = this.viewer.entities.add({
+      id: 'path:primary:planned-far',
+      polyline: {
+        positions: this.pathPositions(source, (now) => this.farSpan(now, now, now + ahead())),
+        width: 2,
+        material: COLORS.planned.withAlpha(0.45),
+        arcType: Cesium.ArcType.NONE,
+        show: showOriginal,
+      },
+    });
+    // Original path (dashed cyan): the path before the latest committed burn, from that burn on, kept
+    // for comparison for one orbit after it.
     const original = this.viewer.entities.add({
       id: 'path:primary:original',
       polyline: {
-        positions: this.pathPositions(traj, (now) => {
-          const burn = approvedBurn();
-          return burn !== null && now >= burn ? [now, now + ahead] : null;
+        positions: this.pathPositions(() => this.previousPrimary, (now) => {
+          const burn = this.previousReplacedAt;
+          if (now >= burn + this.periodS) return null;
+          const start = Math.max(now, burn);
+          const end = now + ahead();
+          return start < end ? [start, end] : null;
         }),
         width: 2,
         material: this.dash(COLORS.primary.withAlpha(0.7)),
         arcType: Cesium.ArcType.NONE,
-        show: new Cesium.CallbackProperty(() => this.layers.original, false),
+        show: showOriginal,
       },
     });
-    this.objectPaths.set('path:primary:past', trail);
-    this.objectPaths.set('path:primary:planned', planned);
-    this.objectPaths.set('path:primary:original', original);
+    this.objectPaths.set(id, [trail, planned, plannedFar, original]);
   }
 
-  private addObjectPath(objectId: string, traj: SampledTrajectory, color: Cesium.Color, isHighlight: boolean): void {
-    const P = this.objects.get(objectId)?.period_s ?? this.periodS;
+  private addObjectPath(objectId: string, baseColor: Cesium.Color, isHighlight: boolean, spawnedAt: number | null): void {
+    const period = () => this.objects.get(objectId)?.period_s ?? this.periodS;
+    const spawned = spawnedAt !== null;
+    const color = new Cesium.CallbackProperty(() => this.colorFor(objectId, baseColor).withAlpha(isHighlight ? 0.85 : spawned ? 0.6 : 0.4), false);
     const entity = this.viewer.entities.add({
       id: `path:${objectId}`,
       polyline: {
-        positions: this.pathPositions(traj, (now) => [now - P * 0.5, now + P]),
-        width: isHighlight ? 2 : 1,
-        material: this.dash(color.withAlpha(isHighlight ? 0.85 : 0.4), isHighlight ? 12 : 8),
+        positions: this.pathPositions(this.trajectoryOf(objectId), (now) => {
+          const start = Math.max(now - period() * 0.5, spawnedAt ?? Number.NEGATIVE_INFINITY);
+          return start < now + period() ? [start, now + period()] : null;
+        }),
+        width: isHighlight ? 2 : spawned ? 1.5 : 1,
+        material: this.dash(color, isHighlight || spawned ? 12 : 8),
         arcType: Cesium.ArcType.NONE,
-        show: new Cesium.CallbackProperty(() => (isHighlight ? this.layers.secondary : this.layers.backgroundOrbits && this.layers.background), false),
+        show: new Cesium.CallbackProperty(() => {
+          if (isHighlight || spawned) return this.layers.secondary && (spawnedAt === null || this.controller.currentUnix >= spawnedAt);
+          return this.layers.backgroundOrbits && this.layers.background;
+        }, false),
       },
     });
-    this.objectPaths.set(`path:${objectId}`, entity);
+    this.objectPaths.set(objectId, [entity]);
   }
 
   // ------------------------------------------------------------------ conjunction
@@ -442,15 +714,15 @@ export class GlobeScene {
     this.conjunctionModelId = null;
     if (!conj) return;
     const secondary = this.objects.get(conj.secondary_id);
-    const secondaryTraj = this.trajectories.get(conj.secondary_id);
-    if (secondary && secondaryTraj && !this.models.has(conj.secondary_id)) {
-      this.addModel(secondary, secondaryTraj);
+    if (secondary && this.trajectories.has(conj.secondary_id) && !this.models.has(conj.secondary_id)) {
+      this.addModel(secondary);
       this.conjunctionModelId = conj.secondary_id;
     }
     const rp = conj.primary_state_teme.r_km as [number, number, number];
     const rs = conj.secondary_state_teme.r_km as [number, number, number];
     const mid: [number, number, number] = [(rp[0] + rs[0]) / 2, (rp[1] + rs[1]) / 2, (rp[2] + rs[2]) / 2];
-    const show = new Cesium.CallbackProperty(() => this.layers.markers, false);
+    // the markers describe a pass ahead; once it is over they go, whatever is selected
+    const show = new Cesium.CallbackProperty(() => this.layers.markers && this.controller.currentUnix < conj.tca_unix + PASS_DONE_S, false);
     // Danger region: enlarged sphere at the predicted closest-approach point.
     const radiusM = Math.max(2500, Math.min(25_000, conj.miss_distance_km * 1000 * 3));
     this.conjunctionEntities.push(
@@ -499,40 +771,57 @@ export class GlobeScene {
     );
   }
 
+  /** Colour objects by their screened threat state (red critical/elevated, amber unverified, blue monitoring). */
+  setThreats(screening: ScreenResponse | null): void {
+    this.threats = (screening?.conjunctions ?? []).map((c) => ({ id: c.secondary_id, state: c.threat_state, tcaUnix: c.tca_unix }));
+  }
+
   // ------------------------------------------------------------------ candidates
-  setCandidates(candidates: Maneuver[], trajectories: Record<string, Trajectory>, selectedId: string | null, approvedId: string | null): void {
+  /** Candidate burns under consideration; committed ones are drawn by setCommittedBurns instead. */
+  setCandidates(candidates: Maneuver[], trajectories: Record<string, Trajectory>, selectedId: string | null, committedIds: string[]): void {
     for (const list of this.candidateEntities.values()) for (const e of list) this.viewer.entities.remove(e);
     this.candidateEntities.clear();
     this.candidateTrajectories.clear();
     this.candidates = candidates;
-    this.approvedCandidateId = approvedId;
     for (const cand of candidates) {
+      if (committedIds.includes(cand.maneuver_id)) continue;
       const t = trajectories[cand.maneuver_id];
       if (!t) continue;
       const traj = new SampledTrajectory(t);
       this.candidateTrajectories.set(cand.maneuver_id, traj);
-      const isApproved = approvedId === cand.maneuver_id;
       const isSelected = selectedId === cand.maneuver_id;
-      const color = isApproved ? COLORS.approved : COLORS.candidate;
+      const color = COLORS.candidate;
       const burn = cand.burn_time_unix;
-      const showPath = new Cesium.CallbackProperty(() => this.layers.candidates || isApproved, false);
+      const showPath = new Cesium.CallbackProperty(() => this.layers.candidates, false);
+      // from the burn through the closest approach, for comparison with the current path
+      const span = (now: number): [number, number] => [Math.max(burn, now - this.periodS), Math.max(cand.post_tca_unix + 900, now + this.periodS * AHEAD_ORBITS)];
       const entities: Cesium.Entity[] = [];
+      if (isSelected) {
+        // close views: the band beyond the next minute continues as a thin line (see CLOSE_VIEW_M)
+        entities.push(
+          this.viewer.entities.add({
+            id: `cand:${cand.maneuver_id}#path-far`,
+            polyline: {
+              positions: this.pathPositions(() => traj, (now) => this.farSpan(now, ...span(now))),
+              width: 2,
+              material: color.withAlpha(0.45),
+              arcType: Cesium.ArcType.NONE,
+              show: showPath,
+            },
+          }),
+        );
+      }
       entities.push(
         this.viewer.entities.add({
           id: `cand:${cand.maneuver_id}#path`,
           polyline: {
-            positions: this.pathPositions(traj, (now) => {
-              const ahead = this.periodS * AHEAD_ORBITS;
-              // approved: the trajectory itself, so the planned path's half-orbit horizon from the burn on;
-              // other candidates: from the burn through the closest approach, for comparison
-              const start = isApproved ? Math.max(burn, now) : Math.max(burn, now - this.periodS);
-              const end = isApproved ? now + ahead : Math.max(cand.post_tca_unix + 900, now + ahead);
-              return start < end ? [start, end] : null;
+            positions: this.pathPositions(() => traj, (now) => {
+              const [start, end] = span(now);
+              return isSelected ? this.nearSpan(now, start, end) : start < end ? [start, end] : null;
             }),
-            // approved: the planned path's teal band continues along the maneuvered trajectory;
             // selected: a green band; other candidates: faint solid green
-            width: isApproved ? 9 : isSelected ? 7 : 1.5,
-            material: isApproved ? this.glow(COLORS.planned.withAlpha(0.95)) : isSelected ? this.glow(color.withAlpha(0.85)) : color.withAlpha(0.4),
+            width: isSelected ? 7 : 1.5,
+            material: isSelected ? this.glow(color.withAlpha(0.85)) : color.withAlpha(0.4),
             arcType: Cesium.ArcType.NONE,
             show: showPath,
           },
@@ -541,36 +830,39 @@ export class GlobeScene {
           id: `cand:${cand.maneuver_id}#burn`,
           position: this.staticPositionProperty(cand.burn_state_teme.r_km as [number, number, number]),
           point: {
-            pixelSize: isSelected || isApproved ? 9 : 6,
+            pixelSize: isSelected ? 9 : 6,
             color: COLORS.burn,
-            outlineColor: Cesium.Color.fromCssColorString('#05080f'),
+            outlineColor: POINT_OUTLINE,
             outlineWidth: 1.5,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
             show: showPath,
           },
           label: {
             ...this.labelGraphics(`BURN ${cand.direction} ${cand.dv_magnitude_mps.toFixed(2)} m/s`, COLORS.burn, 22),
-            show: new Cesium.CallbackProperty(() => this.layers.labels && (isSelected || isApproved), false),
+            show: new Cesium.CallbackProperty(() => this.layers.labels && isSelected, false),
           },
         }),
       );
-      if (isSelected || isApproved) {
+      if (isSelected) {
         // the maneuvered primary as a moving ghost marker after the burn
         entities.push(
           this.viewer.entities.add({
             id: `cand:${cand.maneuver_id}#ghost`,
-            position: this.positionProperty(traj),
+            position: new Cesium.CallbackPositionProperty((time, result) => {
+              const p = traj.positionAt(this.unixOf(time));
+              return p ? temeToFixed(time ?? this.bridge.toJulian(this.controller.currentUnix), p, result) : undefined;
+            }, false, Cesium.ReferenceFrame.FIXED),
             point: {
               pixelSize: 6,
               color: color.withAlpha(0.9),
-              outlineColor: Cesium.Color.fromCssColorString('#05080f'),
+              outlineColor: POINT_OUTLINE,
               outlineWidth: 1,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              show: new Cesium.CallbackProperty(() => (this.layers.candidates || isApproved) && this.controller.currentUnix >= burn, false),
+              show: new Cesium.CallbackProperty(() => this.layers.candidates && this.controller.currentUnix >= burn, false),
             },
             label: {
-              ...this.labelGraphics(isApproved ? 'MANEUVERED (APPROVED)' : 'MANEUVERED (CANDIDATE)', color, 24),
-              show: new Cesium.CallbackProperty(() => this.layers.labels && (this.layers.candidates || isApproved) && this.controller.currentUnix >= burn, false),
+              ...this.labelGraphics('MANEUVERED (CANDIDATE)', color, 24),
+              show: new Cesium.CallbackProperty(() => this.layers.labels && this.layers.candidates && this.controller.currentUnix >= burn, false),
             },
           }),
           this.viewer.entities.add({
@@ -585,50 +877,177 @@ export class GlobeScene {
     }
   }
 
+  // ------------------------------------------------------------------ committed burns
+  /**
+   * Burns that are part of the primary's trajectory: a marker and label at each burn point, the
+   * post-burn closest approach, a flare while the burn fires, and the thruster plume on the model.
+   * `previous` is the path before the latest burn, drawn dashed for comparison.
+   */
+  setCommittedBurns(maneuvers: Maneuver[], previous: PreviousPath | null): void {
+    for (const e of this.committedEntities) this.viewer.entities.remove(e);
+    this.committedEntities = [];
+    this.committed = maneuvers;
+    this.burnRefs = maneuvers.map((m) => ({ id: m.maneuver_id, burnUnix: m.burn_time_unix, dvRtn: m.dv_rtn_mps }));
+    this.previousPrimary = previous ? new SampledTrajectory(previous.trajectory) : null;
+    this.previousReplacedAt = previous?.replacedAtBurnUnix ?? 0;
+    for (const m of maneuvers) {
+      const mid = m.maneuver_id;
+      const burn = m.burn_time_unix;
+      const showMarker = new Cesium.CallbackProperty(() => this.layers.markers && this.controller.currentUnix < burn + this.periodS, false);
+      const intensity = () => (this.plume.active?.id === mid ? plumeIntensity(this.plume, performance.now()) : 0);
+      const hhmmss = new Date(burn * 1000).toISOString().slice(11, 19);
+      // the delta-v itself, drawn from the spacecraft while the burn fires and a moment after
+      const arrowOn = () => this.plume.active?.id === mid || (this.lastFired?.id === mid && performance.now() - this.lastFired.endedMs < DV_ARROW_LINGER_MS);
+      const dvRtn = m.dv_rtn_mps;
+      this.committedEntities.push(
+        this.viewer.entities.add({
+          id: `burn:${mid}#dv`,
+          polyline: {
+            positions: new Cesium.CallbackProperty((time) => {
+              const st = this.primaryStateNow;
+              if (!st || !arrowOn()) return [];
+              const r = this.primaryId ? this.models.get(this.primaryId)?.envelopeRadiusM ?? 10 : 10;
+              const dir = rtnDirectionTeme(st.p, st.v, dvRtn);
+              const lengthKm = Math.max(3 * r, 30) / 1000;
+              const tip: Vec3 = [st.p[0] + dir[0] * lengthKm, st.p[1] + dir[1] * lengthKm, st.p[2] + dir[2] * lengthKm];
+              const jd = time ?? this.bridge.toJulian(this.controller.currentUnix);
+              return [temeToFixed(jd, st.p), temeToFixed(jd, tip)];
+            }, false),
+            width: 14,
+            material: new Cesium.PolylineArrowMaterialProperty(COLORS.burn),
+            arcType: Cesium.ArcType.NONE,
+            show: new Cesium.CallbackProperty(() => arrowOn(), false),
+          },
+        }),
+        this.viewer.entities.add({
+          id: `burn:${mid}#point`,
+          position: this.staticPositionProperty(m.burn_state_teme.r_km as [number, number, number]),
+          point: { pixelSize: 9, color: COLORS.burn, outlineColor: POINT_OUTLINE, outlineWidth: 1.5, disableDepthTestDistance: Number.POSITIVE_INFINITY, show: showMarker },
+          label: {
+            ...this.labelGraphics(`BURN ${m.direction} ${m.dv_magnitude_mps.toFixed(2)} m/s · ${hhmmss}`, COLORS.burn, 22),
+            show: new Cesium.CallbackProperty(() => this.layers.labels && this.layers.markers && this.controller.currentUnix < burn + this.periodS, false),
+          },
+        }),
+        this.viewer.entities.add({
+          id: `burn:${mid}#tca`,
+          position: this.staticPositionProperty(m.post_primary_state_teme.r_km as [number, number, number]),
+          point: { pixelSize: 7, color: Cesium.Color.TRANSPARENT, outlineColor: COLORS.approved, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY, show: new Cesium.CallbackProperty(() => this.layers.markers && this.controller.currentUnix < m.post_tca_unix + 900, false) },
+          label: {
+            ...this.labelGraphics(`POST-BURN TCA · miss ${m.post_miss_distance_km.toFixed(2)} km`, COLORS.approved, 22),
+            show: new Cesium.CallbackProperty(() => this.layers.labels && this.layers.markers && this.controller.currentUnix < m.post_tca_unix + 900, false),
+          },
+        }),
+        this.viewer.entities.add({
+          id: `burn:${mid}#flare`,
+          position: this.staticPositionProperty(m.burn_state_teme.r_km as [number, number, number]),
+          billboard: {
+            image: (this.flare ??= flareImage()),
+            width: new Cesium.CallbackProperty(() => 48 + 64 * intensity(), false),
+            height: new Cesium.CallbackProperty(() => 48 + 64 * intensity(), false),
+            color: new Cesium.CallbackProperty(() => Cesium.Color.WHITE.withAlpha(Math.min(1, 0.3 + intensity())), false),
+            show: new Cesium.CallbackProperty(() => this.plume.active?.id === mid, false),
+          },
+        }),
+      );
+    }
+  }
+
   // ------------------------------------------------------------------ layers / camera
   setLayers(layers: LayerFlags): void {
     this.layers = { ...layers };
   }
 
-  /** Track the primary from the default offset (re-tracking makes Cesium apply the offset again). */
-  private trackPrimary(): void {
-    if (this.destroyed) return;
-    if (this.primaryEntity) {
-      this.primaryEntity.viewFrom = this.defaultViewFrom();
-      this.viewer.trackedEntity = undefined;
-      this.viewer.trackedEntity = this.primaryEntity;
-    } else {
-      this.viewer.trackedEntity = undefined;
-      this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-    }
+  /** Zoom toward what the camera looks at by `factor` (> 1 closer): the spacecraft in Follow, the Earth in World. */
+  zoomCamera(factor: number): void {
+    if (this.destroyed || !(factor > 0)) return;
+    const camera = this.viewer.camera;
+    // in both modes the camera sits in a frame centred on its target, so its position is the range
+    const range = Cesium.Cartesian3.magnitude(camera.position);
+    const [lo, hi] = this.cameraMode === 'follow' && this.viewer.trackedEntity ? [MIN_ZOOM_M * 2, 5_000_000] : [WORLD_MIN_ZOOM_M, 80_000_000];
+    const target = Math.min(hi, Math.max(lo, range / factor));
+    camera.zoomIn(range - target);
   }
 
-  /** Back to the default framing of the primary after the user has zoomed or orbited the camera. */
+  setCameraMode(mode: CameraMode): void {
+    if (this.cameraMode === mode) return;
+    this.cameraMode = mode;
+    this.applyCameraMode();
+  }
+
+  /** Back to the current view's default framing after the user has zoomed or orbited the camera. */
   resetCamera(): void {
+    this.applyCameraMode();
+  }
+
+  private applyCameraMode(): void {
+    if (this.destroyed) return;
+    const controller = this.viewer.scene.screenSpaceCameraController;
     this.viewer.trackedEntity = undefined;
     this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-    this.trackPrimary();
+    if (this.cameraMode === 'follow') {
+      controller.minimumZoomDistance = MIN_ZOOM_M;
+      if (this.primaryEntity) {
+        // re-tracking makes Cesium apply the offset again
+        this.primaryEntity.viewFrom = this.defaultViewFrom();
+        this.viewer.trackedEntity = this.primaryEntity;
+      }
+      return;
+    }
+    controller.minimumZoomDistance = WORLD_MIN_ZOOM_M;
+    // without a trajectory yet, the camera keeps its place (re-read as an inertial offset on the next frame)
+    this.pendingWorldOffset = this.worldFraming() ?? Cesium.Cartesian3.clone(this.viewer.camera.position);
+  }
+
+  /**
+   * Default world-view camera offset (TEME, metres): above the orbit plane on the spacecraft's side,
+   * so the orbit reads as a ring around the Earth with the spacecraft on the near side.
+   */
+  private worldFraming(): Cesium.Cartesian3 | null {
+    const traj = this.primaryId ? this.trajectories.get(this.primaryId) : null;
+    const st = traj?.stateAt(this.controller.currentUnix);
+    if (!st) return null;
+    const radial = Cesium.Cartesian3.normalize(new Cesium.Cartesian3(st.p[0], st.p[1], st.p[2]), new Cesium.Cartesian3());
+    const velocity = new Cesium.Cartesian3(st.v[0], st.v[1], st.v[2]);
+    const normal = Cesium.Cartesian3.cross(radial, velocity, new Cesium.Cartesian3());
+    if (Cesium.Cartesian3.magnitude(normal) < 1e-9) return Cesium.Cartesian3.multiplyByScalar(radial, WORLD_RANGE_M, radial);
+    Cesium.Cartesian3.normalize(normal, normal);
+    const direction = Cesium.Cartesian3.add(normal, Cesium.Cartesian3.multiplyByScalar(radial, 0.8, radial), normal);
+    Cesium.Cartesian3.normalize(direction, direction);
+    return Cesium.Cartesian3.multiplyByScalar(direction, WORLD_RANGE_M, direction);
   }
 
   // ------------------------------------------------------------------ cleanup
   private clearScenario(): void {
     this.setConjunction(null);
-    this.setCandidates([], {}, null, null);
+    this.setCandidates([], {}, null, []);
+    this.setCommittedBurns([], null);
     this.viewer.trackedEntity = undefined;
     this.viewer.entities.removeAll();
     this.objectEntities.clear();
     this.objectPaths.clear();
+    this.records.clear();
     this.trajectories.clear();
     this.objects.clear();
+    this.labelCache.clear();
     this.primaryEntity = null;
     this.primaryId = null;
+    this.primaryStateNow = null;
+    this.detail = null;
     for (const id of [...this.models.keys()]) this.removeModel(id);
     this.conjunctionModelId = null;
+    this.plume = INITIAL_PLUME;
+    this.lastFired = null;
+    this.threats = [];
+    if (this.reportedBurnId !== null) {
+      this.reportedBurnId = null;
+      if (!this.inset) this.callbacks.onBurnFiring?.(null);
+    }
   }
 
   destroy(): void {
     this.destroyed = true;
     this.preUpdateRemover();
+    this.postUpdateRemover();
     this.postRenderRemover();
     for (const id of [...this.models.keys()]) this.removeModel(id);
     this.handler.destroy();
@@ -642,5 +1061,9 @@ export class GlobeScene {
 
   get currentCandidates(): Maneuver[] {
     return this.candidates;
+  }
+
+  get committedBurns(): Maneuver[] {
+    return this.committed;
   }
 }

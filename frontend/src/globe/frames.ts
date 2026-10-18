@@ -27,6 +27,11 @@ export class TimeBridge {
 const EARTH_ROTATION = new Cesium.Cartesian3(0, 0, 7.2921159e-5);
 const scratchOmegaR = new Cesium.Cartesian3();
 
+/** The TEME -> Earth-fixed rotation at `time` (the inertial frame the simulation's states are given in). */
+export function temeToFixedMatrix(time: Cesium.JulianDate, result?: Cesium.Matrix3): Cesium.Matrix3 {
+  return Cesium.Transforms.computeTemeToPseudoFixedMatrix(time, result ?? new Cesium.Matrix3());
+}
+
 /** Rotate a TEME velocity (km/s) into the Earth-fixed frame (m/s), including the -omega x r term. */
 export function temeVelocityToFixed(time: Cesium.JulianDate, v: Vec3, positionFixed: Cesium.Cartesian3, result?: Cesium.Cartesian3): Cesium.Cartesian3 {
   const m = Cesium.Transforms.computeTemeToPseudoFixedMatrix(time, scratchMatrix);

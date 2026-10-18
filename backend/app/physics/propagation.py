@@ -10,16 +10,20 @@ Two models are used and never silently interchanged:
   drag, J3/J4 and resonance terms, so the un-maneuvered trajectory in the two
   models drifts apart by up to a few km over several hours; the planner reports
   that model difference explicitly (see maneuver_planner.baseline).
+* **Piecewise**: an object with committed burns keeps its native model up to the
+  first burn and follows a two-body + J2 arc from each burn's post-burn state to
+  the next burn (``OrbitalObject.segments``). Every reader dispatches through
+  ``propagate``, so screening, planning and trajectories see the committed path.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from sgp4.api import SatrecArray
 
-from ..data.catalog import OrbitalObject
+from ..data.catalog import OrbitalObject, Segment
 from ..data.tle import SGP4_ERROR_MESSAGES
 from .constants import J2, MU_EARTH_KM3_S2, R_EARTH_KM
 from .time_utils import unix_to_jd
@@ -27,6 +31,7 @@ from .time_utils import unix_to_jd
 UNITS = {"position": "km", "velocity": "km/s", "time": "unix seconds (UTC)"}
 MODEL_SGP4 = "SGP4"
 MODEL_NUMERICAL = "NUMERICAL_J2"
+MODEL_PIECEWISE = "PIECEWISE_J2"
 
 
 @dataclass
@@ -169,6 +174,115 @@ def propagate_numerical(obj: OrbitalObject, times_unix: np.ndarray, step_s: floa
 
 
 # --------------------------------------------------------------------------
+# Piecewise model: the native arc up to the first committed burn, then one
+# two-body + J2 arc per burn
+# --------------------------------------------------------------------------
+
+def original_of(obj: OrbitalObject) -> OrbitalObject:
+    """The object without its committed burns: native model, basis and orbit summary."""
+    if obj.propagation_model != MODEL_PIECEWISE:
+        return obj
+    summary = dict(obj.base_summary or {})
+    return replace(obj, propagation_model=obj.base_model or MODEL_NUMERICAL,
+                   position_basis=obj.base_position_basis or obj.position_basis,
+                   base_model="", base_position_basis="", base_summary=None, segments=(),
+                   warnings=list(obj.warnings), **summary)
+
+
+def burn_times(obj: OrbitalObject) -> List[float]:
+    return [float(s.t_start_unix) for s in obj.segments]
+
+
+def latest_state(obj: OrbitalObject) -> Tuple[Optional[float], np.ndarray, np.ndarray]:
+    """(epoch_unix, r_km, v_kms) of the last arc's anchor, or the native state (SGP4: at its epoch)."""
+    if obj.segments:
+        s = obj.segments[-1]
+        return s.epoch_unix, s.r0_km, s.v0_kms
+    if obj.r0_teme_km is not None and obj.v0_teme_kms is not None and obj.state_epoch_unix is not None:
+        return obj.state_epoch_unix, obj.r0_teme_km, obj.v0_teme_kms
+    t = obj.epoch_unix
+    if t is None:
+        return None, np.full(3, np.nan), np.full(3, np.nan)
+    res = propagate_sgp4(obj, np.array([t]))
+    if res.positions_km.shape[0] != 1:
+        return t, np.full(3, np.nan), np.full(3, np.nan)
+    return t, res.positions_km[0], res.velocities_kms[0]
+
+
+def _arc_index(obj: OrbitalObject, t_unix: float) -> int:
+    """0 for the native arc, k for segments[k - 1] (the arc that starts at or before t)."""
+    return int(np.searchsorted(np.array([s.t_start_unix for s in obj.segments]), t_unix, side="right"))
+
+
+def propagate_piecewise(obj: OrbitalObject, times_unix: np.ndarray, step_s: float = 10.0) -> PropagationResult:
+    times = np.asarray(times_unix, dtype=np.float64)
+    n = len(times)
+    r = np.full((n, 3), np.nan)
+    v = np.full((n, 3), np.nan)
+    err = np.zeros(n, dtype=int)
+    messages: List[str] = []
+    idx = np.searchsorted(np.array([s.t_start_unix for s in obj.segments]), times, side="right")
+    base_mask = idx == 0
+    if base_mask.any():
+        res = propagate(original_of(obj), times[base_mask], step_s)
+        if res.positions_km.shape[0] == int(base_mask.sum()):
+            r[base_mask] = res.positions_km
+            v[base_mask] = res.velocities_kms
+            if res.error_codes.size:
+                err[base_mask] = res.error_codes
+        else:
+            err[base_mask] = 1
+        messages += res.messages
+    for k, seg in enumerate(obj.segments, start=1):
+        mask = idx == k
+        if not mask.any():
+            continue
+        ys = propagate_states(np.concatenate([seg.r0_km, seg.v0_kms])[None, :], seg.epoch_unix, times[mask], step_s)
+        r[mask] = ys[:, 0, 0:3]
+        v[mask] = ys[:, 0, 3:6]
+    n_bad = int(np.count_nonzero(err))
+    status = "OK" if n_bad == 0 else ("FAILED" if n_bad == n else "PARTIAL")
+    return PropagationResult(obj.object_id, times, r, v, MODEL_PIECEWISE, obj.epoch_unix, status, err, messages)
+
+
+def _anchored_at(obj: OrbitalObject, t_unix: float, r_km: np.ndarray, v_kms: np.ndarray) -> OrbitalObject:
+    r = np.asarray(r_km, dtype=float).copy()
+    v = np.asarray(v_kms, dtype=float).copy()
+    if obj.propagation_model == MODEL_PIECEWISE:
+        k = _arc_index(obj, t_unix)
+        if k == 0:
+            return replace(obj, state_epoch_unix=float(t_unix), r0_teme_km=r, v0_teme_kms=v, warnings=list(obj.warnings))
+        seg = replace(obj.segments[k - 1], epoch_unix=float(t_unix), r0_km=r, v0_kms=v)
+        return replace(obj, segments=obj.segments[:k - 1] + (seg,) + obj.segments[k:], warnings=list(obj.warnings))
+    return replace(obj, state_epoch_unix=float(t_unix), r0_teme_km=r, v0_teme_kms=v, warnings=list(obj.warnings))
+
+
+def _anchorable(obj: OrbitalObject, t_unix: float) -> bool:
+    if obj.propagation_model == MODEL_NUMERICAL:
+        return True
+    if obj.propagation_model == MODEL_PIECEWISE:
+        return _arc_index(obj, t_unix) > 0 or (obj.base_model or "") == MODEL_NUMERICAL
+    return False
+
+
+def anchored(obj: OrbitalObject, t_unix: float, step_s: float = 10.0) -> OrbitalObject:
+    """The same trajectory with its numerical anchor moved to t_unix, so repeated evaluations near
+    t are cheap. SGP4 arcs are returned unchanged; a piecewise object re-anchors the arc containing
+    t and keeps every later burn arc."""
+    if not _anchorable(obj, t_unix):
+        return obj
+    res = propagate(obj, np.array([t_unix]), step_s)
+    return _anchored_at(obj, t_unix, res.positions_km[0], res.velocities_kms[0])
+
+
+def anchored_with_state(obj: OrbitalObject, t_unix: float, r_km: np.ndarray, v_kms: np.ndarray) -> OrbitalObject:
+    """Like anchored(), using a state already known to lie on the trajectory at t_unix (no integration)."""
+    if not _anchorable(obj, t_unix):
+        return obj
+    return _anchored_at(obj, t_unix, r_km, v_kms)
+
+
+# --------------------------------------------------------------------------
 # Dispatch
 # --------------------------------------------------------------------------
 
@@ -178,6 +292,8 @@ def propagate(obj: OrbitalObject, times_unix: np.ndarray, numerical_step_s: floa
         return propagate_sgp4(obj, times_unix)
     if obj.propagation_model == MODEL_NUMERICAL:
         return propagate_numerical(obj, times_unix, step_s=numerical_step_s)
+    if obj.propagation_model == MODEL_PIECEWISE:
+        return propagate_piecewise(obj, times_unix, step_s=numerical_step_s)
     return PropagationResult(obj.object_id, np.asarray(times_unix, float), np.zeros((0, 3)), np.zeros((0, 3)),
                              obj.propagation_model, obj.epoch_unix, status="FAILED",
                              messages=[f"unknown propagation model '{obj.propagation_model}'"])
@@ -185,8 +301,9 @@ def propagate(obj: OrbitalObject, times_unix: np.ndarray, numerical_step_s: floa
 
 def propagate_batch(objects: Iterable[OrbitalObject], times_unix: np.ndarray,
                     numerical_step_s: float = 10.0) -> Dict[str, PropagationResult]:
-    """Propagate many objects at the same times. SGP4 records are evaluated
-    together through SatrecArray for speed."""
+    """Propagate many objects at the same times. SGP4 records are evaluated together through
+    SatrecArray; numerical objects sharing an integration epoch are marched together in one RK4
+    batch; everything else (piecewise objects, incomplete records) goes one by one."""
     objects = list(objects)
     times = np.asarray(times_unix, dtype=np.float64)
     results: Dict[str, PropagationResult] = {}
@@ -197,6 +314,18 @@ def propagate_batch(objects: Iterable[OrbitalObject], times_unix: np.ndarray,
         err, r, v = arr.sgp4(jd, fr)
         for i, o in enumerate(sgp4_objs):
             results[o.object_id] = _finish(o, times, err[i], r[i], v[i], MODEL_SGP4)
+    groups: Dict[float, List[OrbitalObject]] = {}
+    for o in objects:
+        if (o.object_id not in results and o.propagation_model == MODEL_NUMERICAL and o.r0_teme_km is not None
+                and o.v0_teme_kms is not None and o.state_epoch_unix is not None):
+            groups.setdefault(float(o.state_epoch_unix), []).append(o)
+    for epoch, group in groups.items():
+        states0 = np.stack([np.concatenate([o.r0_teme_km, o.v0_teme_kms]) for o in group])
+        ys = propagate_states(states0, epoch, times, numerical_step_s)
+        for i, o in enumerate(group):
+            results[o.object_id] = PropagationResult(o.object_id, times, np.ascontiguousarray(ys[:, i, 0:3]),
+                                                     np.ascontiguousarray(ys[:, i, 3:6]), MODEL_NUMERICAL,
+                                                     o.state_epoch_unix, "OK", np.zeros(len(times), dtype=int), [])
     for o in objects:
         if o.object_id in results:
             continue

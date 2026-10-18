@@ -5,7 +5,10 @@ import type {
   CatalogResponse,
   Conjunction,
   DecisionResponse,
+  EvaluateResponse,
   HealthResponse,
+  JunkKind,
+  JunkTypesResponse,
   ObjectDetail,
   ObjectSummary,
   PlanResponse,
@@ -13,7 +16,10 @@ import type {
   ScenarioSummary,
   ScreenResponse,
   SecondaryCheckResponse,
+  SimulationEvent,
   SimulationState,
+  SpawnBatchResponse,
+  SpawnResponse,
   Trajectory,
 } from '../types/api';
 
@@ -74,16 +80,16 @@ export const api = {
     request<{ scenario_id: string; primary_id: string; objects: ObjectSummary[] }>(`/api/objects${qs({ scenario_id: scenarioId })}`),
   objectDetail: (scenarioId: string, objectId: string, at?: string) =>
     request<ObjectDetail>(`/api/objects/${encodeURIComponent(objectId)}${qs({ scenario_id: scenarioId, at })}`),
-  trajectory: (scenarioId: string, objectId: string, opts: { start?: string; end?: string; step_s?: number; maneuver_id?: string } = {}) =>
+  trajectory: (scenarioId: string, objectId: string, opts: { start?: string; end?: string; step_s?: number; maneuver_id?: string; variant?: 'committed' | 'original' } = {}) =>
     request<Trajectory>(
       `/api/objects/${encodeURIComponent(objectId)}/trajectory${qs({ scenario_id: scenarioId, ...opts })}`,
     ),
-  trajectories: (scenarioId: string, objectIds: string[], step_s = 60, start?: string, end?: string) =>
+  trajectories: (scenarioId: string, objectIds: string[], step_s = 60, start?: string, end?: string, variant?: 'committed' | 'original') =>
     request<{ trajectories: Trajectory[] }>('/api/objects/trajectories', {
       method: 'POST',
-      body: JSON.stringify({ scenario_id: scenarioId, object_ids: objectIds, step_s, start, end }),
+      body: JSON.stringify({ scenario_id: scenarioId, object_ids: objectIds, step_s, start, end, variant }),
     }),
-  screen: (scenarioId: string, opts: { pc_policy?: string; primary_id?: string } = {}) =>
+  screen: (scenarioId: string, opts: { pc_policy?: string; primary_id?: string; start?: string; end?: string } = {}) =>
     request<ScreenResponse>('/api/conjunctions/screen', {
       method: 'POST',
       body: JSON.stringify({ scenario_id: scenarioId, ...opts }),
@@ -93,10 +99,10 @@ export const api = {
     request<PlanResponse>(`/api/conjunctions/${encodeURIComponent(conjunctionId)}/maneuvers${qs({ scenario_id: scenarioId })}`),
   conjunction: (scenarioId: string, id: string) =>
     request<Conjunction>(`/api/conjunctions/${encodeURIComponent(id)}${qs({ scenario_id: scenarioId })}`),
-  planManeuvers: (scenarioId: string, conjunctionId: string, maxCandidates = 3) =>
+  planManeuvers: (scenarioId: string, conjunctionId: string, maxCandidates = 3, earliestBurn?: string) =>
     request<PlanResponse>(`/api/conjunctions/${encodeURIComponent(conjunctionId)}/maneuvers`, {
       method: 'POST',
-      body: JSON.stringify({ scenario_id: scenarioId, max_candidates: maxCandidates }),
+      body: JSON.stringify({ scenario_id: scenarioId, max_candidates: maxCandidates, earliest_burn: earliestBurn }),
     }),
   secondaryCheck: (scenarioId: string, maneuverId: string) =>
     request<SecondaryCheckResponse>(`/api/maneuvers/${encodeURIComponent(maneuverId)}/secondary-check`, {
@@ -118,5 +124,32 @@ export const api = {
     request<DecisionResponse>('/api/simulation/reject', {
       method: 'POST',
       body: JSON.stringify({ scenario_id: scenarioId, maneuver_id: maneuverId, reason }),
+    }),
+  // ---- sandbox (scenario C only; the backend answers 409 elsewhere)
+  setAutopilot: (scenarioId: string, enabled: boolean) =>
+    request<SimulationState>('/api/simulation/autopilot', {
+      method: 'POST',
+      body: JSON.stringify({ scenario_id: scenarioId, enabled }),
+    }),
+  junkTypes: () => request<JunkTypesResponse>('/api/sandbox/junk-types'),
+  sandboxSpawn: (scenarioId: string, now: string, kind: JunkKind, opts: { time_to_tca_s?: number; seed?: number } = {}) =>
+    request<SpawnResponse>('/api/sandbox/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ scenario_id: scenarioId, now, kind, ...opts }),
+    }),
+  sandboxSpawnRandom: (scenarioId: string, now: string, count: number, seed?: number) =>
+    request<SpawnBatchResponse>('/api/sandbox/spawn_random', {
+      method: 'POST',
+      body: JSON.stringify({ scenario_id: scenarioId, now, count, seed }),
+    }),
+  sandboxRemove: (scenarioId: string, now: string, opts: { count?: number; object_ids?: string[] }) =>
+    request<{ removed: string[]; events: SimulationEvent[]; catalog_version: number; simulation: SimulationState }>('/api/sandbox/remove', {
+      method: 'POST',
+      body: JSON.stringify({ scenario_id: scenarioId, now, ...opts }),
+    }),
+  sandboxEvaluate: (scenarioId: string, now: string, earliestBurnAfterS?: number) =>
+    request<EvaluateResponse>('/api/sandbox/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ scenario_id: scenarioId, now, earliest_burn_after_s: earliestBurnAfterS }),
     }),
 };

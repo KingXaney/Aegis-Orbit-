@@ -55,4 +55,4 @@ def test_maneuvered_primary_state_at_burn(synthetic_catalog, synthetic_plan):
     res = propagate(mp, np.array([cand.burn_time_unix]))
     assert np.allclose(res.positions_km[0], cand.burn_r_km)
     assert np.allclose(res.velocities_kms[0], cand.burn_v_post_kms)
-    assert mp.propagation_model == "NUMERICAL_J2"
+    assert mp.propagation_model == "PIECEWISE_J2" and mp.base_model == "NUMERICAL_J2"

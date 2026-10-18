@@ -259,6 +259,11 @@ export default function ExplorerPage() {
           Simulate Collision
         </a>
         <p className="mt-2 text-x-12 text-x-muted">Opens the simulator on a scripted encounter with a GPM stand-in.</p>
+        <p className="mt-3 text-x-14">
+          <a href="/mission?scenario=sandbox" className="x-link">
+            Or open the live sandbox: drop space junk into orbit and watch the autopilot dodge it.
+          </a>
+        </p>
       </header>
 
       <section inert={panelOpen} id="globe" aria-label="Live globe of tracked objects" className="relative min-h-[320px] scroll-mt-4 overflow-hidden [grid-area:globe]">

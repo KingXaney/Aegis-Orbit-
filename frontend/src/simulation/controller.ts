@@ -6,7 +6,10 @@
  */
 export interface ControllerState {
   startUnix: number;
+  /** End of a bounded window; Number.POSITIVE_INFINITY when the clock is open-ended. */
   endUnix: number;
+  /** Open-ended (the sandbox): the clock never clamps, never pauses at an end and never rewinds on play. */
+  openEnded: boolean;
   currentUnix: number;
   playing: boolean;
   speed: number; // simulation seconds per real second
@@ -27,7 +30,7 @@ export class SimulationController {
   private caf: (id: number) => void;
 
   constructor(startUnix = 0, endUnix = 1, opts: { notifyIntervalMs?: number; raf?: typeof requestAnimationFrame; caf?: typeof cancelAnimationFrame } = {}) {
-    this.state = { startUnix, endUnix, currentUnix: startUnix, playing: false, speed: 60 };
+    this.state = { startUnix, endUnix, openEnded: false, currentUnix: startUnix, playing: false, speed: 60 };
     this.notifyIntervalMs = opts.notifyIntervalMs ?? 100;
     this.raf = opts.raf ?? ((cb) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(cb) : setTimeout(() => cb(performance.now()), 16) as unknown as number));
     this.caf = opts.caf ?? ((id) => (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame(id) : clearTimeout(id)));
@@ -39,6 +42,14 @@ export class SimulationController {
 
   get currentUnix(): number {
     return this.state.currentUnix;
+  }
+
+  get speed(): number {
+    return this.state.speed;
+  }
+
+  get playing(): boolean {
+    return this.state.playing;
   }
 
   subscribe(fn: Listener): () => void {
@@ -57,10 +68,12 @@ export class SimulationController {
     for (const fn of this.listeners) fn(snap);
   }
 
-  setWindow(startUnix: number, endUnix: number, resetTo?: number): void {
+  /** A bounded window (`endUnix` set) clamps and pauses at its end; `null` makes the clock open-ended. */
+  setWindow(startUnix: number, endUnix: number | null, resetTo?: number): void {
     this.state.startUnix = startUnix;
-    this.state.endUnix = endUnix;
-    this.state.currentUnix = Math.min(Math.max(resetTo ?? startUnix, startUnix), endUnix);
+    this.state.openEnded = endUnix === null;
+    this.state.endUnix = endUnix === null ? Number.POSITIVE_INFINITY : endUnix;
+    this.state.currentUnix = Math.min(Math.max(resetTo ?? startUnix, startUnix), this.state.endUnix);
     this.notify(true);
   }
 
@@ -68,7 +81,7 @@ export class SimulationController {
   tick(dtRealSeconds: number): void {
     if (!this.state.playing) return;
     const next = this.state.currentUnix + dtRealSeconds * this.state.speed;
-    if (next >= this.state.endUnix) {
+    if (!this.state.openEnded && next >= this.state.endUnix) {
       this.state.currentUnix = this.state.endUnix;
       this.state.playing = false;
       this.notify(true);
@@ -90,7 +103,7 @@ export class SimulationController {
 
   play(): void {
     if (this.state.playing) return;
-    if (this.state.currentUnix >= this.state.endUnix) this.state.currentUnix = this.state.startUnix;
+    if (!this.state.openEnded && this.state.currentUnix >= this.state.endUnix) this.state.currentUnix = this.state.startUnix;
     this.state.playing = true;
     this.lastFrame = null;
     this.rafId = this.raf(this.loop);
