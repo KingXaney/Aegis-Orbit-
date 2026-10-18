@@ -1,7 +1,9 @@
+import { useCallback, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Spinner, ThreatBadge } from '../components/ui';
 import { formatUtc } from '../lib/format';
 import type { ScenarioKind } from '../types/api';
+import SettingsPanel, { SETTINGS_PANEL_ID } from './SettingsPanel';
 
 // Home A / B / C in the scenario menu: the real ISS flow, the scripted synthetic conjunction, the live sandbox.
 const SCENARIO_LETTER: Record<ScenarioKind, string> = { real: 'A', synthetic: 'B', sandbox: 'C' };
@@ -19,6 +21,10 @@ export default function TopBar() {
   const simulation = useAppStore((s) => s.simulation);
   const runScreening = useAppStore((s) => s.runScreening);
   const screeningLoading = useAppStore((s) => s.screeningLoading);
+  const health = useAppStore((s) => s.health);
+  const agentMode = useAppStore((s) => s.agentMode);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const src = scenario?.data_source as Record<string, string | undefined> | undefined;
   // the sandbox's autopilot screens on its own, so a manual screening is a secondary action there
   const sandbox = scenario?.kind === 'sandbox';
@@ -54,8 +60,12 @@ export default function TopBar() {
           <Button variant="ghost" size="md" disabled={!scenario || loading} onClick={() => void resetScenario()} title="Reset the scenario to its initial state">
             Reset
           </Button>
+          <Button variant="ghost" size="md" aria-expanded={settingsOpen} aria-controls={SETTINGS_PANEL_ID} onClick={() => setSettingsOpen((o) => !o)}>
+            Settings
+          </Button>
         </div>
       </div>
+      {settingsOpen && <SettingsPanel onClose={closeSettings} />}
       {scenario && (
         <p className="hidden flex-wrap items-center gap-x-2.5 px-1.5 pb-0.5 pt-1 text-[11px] text-dim sm:flex">
           <span className="text-muted">{KIND_LABEL[scenario.kind] ?? scenario.kind}</span>
@@ -66,6 +76,11 @@ export default function TopBar() {
           <span className="hidden sm:inline">
             {scenario.kind === 'real' ? `Elements retrieved ${src?.retrieved_at ? formatUtc(src.retrieved_at) : 'unknown'}` : `Epoch ${formatUtc(scenario.window.start)}`}
           </span>
+          {agentMode === 'deterministic' ? (
+            <span>Agent: deterministic</span>
+          ) : (
+            health && !health.gemini_configured && <span>Agent: deterministic fallback (no Gemini key)</span>
+          )}
           {loading && <Spinner className="text-muted" />}
         </p>
       )}

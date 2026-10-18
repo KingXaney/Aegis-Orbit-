@@ -144,6 +144,8 @@ export interface AppState {
   agentRun: AgentRun | null;
   agentLoading: boolean;
   agentError: string | null;
+  /** Which model the agent runs with (Settings); the backend falls back to deterministic when Gemini has no key. */
+  agentMode: AgentMode;
   simulation: SimulationState | null;
   decisionLoading: boolean;
   decisionError: string | null;
@@ -185,6 +187,7 @@ export interface AppState {
   toggleMissionPanel: () => void;
   setSpeed: (speed: number) => void;
   setSlowForPasses: (on: boolean) => void;
+  setAgentMode: (mode: AgentMode) => void;
   setBurnFiring: (info: { maneuverId: string } | null) => void;
   zoomInset: (factor: number) => void;
   resetInset: () => void;
@@ -242,6 +245,9 @@ const EMPTY_SESSION = {
 const MISSION_PANEL_KEY = 'aegis-orbit.missionPanelOpen';
 const SPEED_KEY = 'aegis-orbit.simSpeed';
 const SLOW_FOR_PASSES_KEY = 'aegis-orbit.slowForPasses';
+const AGENT_MODE_KEY = 'aegis-orbit.agentMode';
+
+export type AgentMode = 'gemini' | 'deterministic';
 
 // Per-viewer conveniences only: storage can be empty or throw (private windows, blocked site data).
 function readMissionPanelOpen(): boolean {
@@ -266,6 +272,14 @@ function readSlowForPasses(): boolean {
     return localStorage.getItem(SLOW_FOR_PASSES_KEY) !== '0';
   } catch {
     return true;
+  }
+}
+
+function readAgentMode(): AgentMode {
+  try {
+    return localStorage.getItem(AGENT_MODE_KEY) === 'deterministic' ? 'deterministic' : 'gemini';
+  } catch {
+    return 'gemini';
   }
 }
 
@@ -370,6 +384,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   agentRun: null,
   agentLoading: false,
   agentError: null,
+  agentMode: readAgentMode(),
   simulation: null,
   decisionLoading: false,
   decisionError: null,
@@ -584,10 +599,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   runAgent: async () => {
-    const { scenarioId, selectedConjunctionId } = get();
+    const { scenarioId, selectedConjunctionId, agentMode } = get();
     set({ agentLoading: true, agentError: null });
     try {
-      const run = await api.analyze(scenarioId, selectedConjunctionId ?? undefined);
+      // "Gemini" in Settings is a preference: the backend's auto mode tries the Gemini models, then falls
+      // back to the deterministic agent (an explicit "gemini" would turn a quota or outage into an error)
+      const run = await api.analyze(scenarioId, selectedConjunctionId ?? undefined, agentMode === 'gemini' ? 'auto' : agentMode);
       set({ agentRun: run, simulation: run.simulation });
       // The agent may have screened and planned; pull those artefacts into the UI.
       try {
@@ -687,6 +704,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const { autoSlow } = get();
     set({ slowForPasses: on, autoSlow: on ? autoSlow : null });
     if (!on && autoSlow) controller.setSpeed(autoSlow.restoreSpeed);
+  },
+  setAgentMode: (mode) => {
+    persist(AGENT_MODE_KEY, mode);
+    set({ agentMode: mode });
   },
   setBurnFiring: (info) => {
     if ((get().burnFiring?.maneuverId ?? null) !== (info?.maneuverId ?? null)) set({ burnFiring: info });

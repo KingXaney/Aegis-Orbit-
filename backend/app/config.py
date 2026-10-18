@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     # Retries per model on a transient error (a 503, or a 429 with a short retry hint), with 2 s, 4 s, ... backoff.
     gemini_retry_attempts: int = 2
     gemini_retry_base_s: float = 2.0
-    agent_mode: str = "auto"  # auto | gemini | deterministic
+    # auto: Gemini with the fallback chain, then deterministic | gemini: strict | deterministic. The UI picks per run.
+    agent_mode: str = "auto"
     agent_max_tool_calls: int = 16
 
     @property

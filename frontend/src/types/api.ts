@@ -8,6 +8,7 @@ export interface HealthResponse {
   version: string;
   agent_mode: string;
   gemini_configured: boolean;
+  gemini_model: string;
   network_allowed: boolean;
   scenarios: string[];
   disclaimer: string;

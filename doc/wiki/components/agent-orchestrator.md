@@ -26,10 +26,15 @@ covers the mechanics.
 ## Provider selection
 
 Selection happens in [orchestrator.py:56-71](../../../backend/app/agent/orchestrator.py#L56-L71). The
-mode is `auto` by default, `gemini` or `deterministic`, from `AGENT_MODE` or the request.
+mode is `auto` by default, or `gemini` or `deterministic`, from `AGENT_MODE` or the request. The
+simulator's Settings panel sends `auto` when the viewer picks Gemini (so a quota or outage still ends
+in the deterministic fallback) and `deterministic` otherwise.
 
-- **`auto`** uses Gemini when `GEMINI_API_KEY` is set and falls back otherwise, with a warning.
-- **`gemini`** without a key also falls back, with a warning.
+- **`auto`** uses Gemini when `GEMINI_API_KEY` is set, trying `GEMINI_MODEL` and then
+  `GEMINI_FALLBACK_MODELS`; when none can serve the run, or without a key, the deterministic agent runs,
+  with a warning.
+- **`gemini`** without a key also falls back, with a warning; with a key, an outage of every model is
+  reported as an error instead of being hidden behind the fallback.
 - **The key stays in the backend.** It is never sent to the browser.
 
 ## The run

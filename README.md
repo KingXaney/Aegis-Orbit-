@@ -78,7 +78,7 @@ See [`.env.example`](.env.example). Backend variables are read from `.env` in th
 | `GEMINI_API_KEY` | empty | Enables the Gemini agent. Never sent to the browser. Empty → deterministic fallback agent. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model used for tool calling (`gemini-2.5-flash` is no longer served to new API keys). |
 | `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview` | Tried in order when the model above cannot serve a run (daily quota, outage, retired model); after the last one the deterministic agent completes the run. |
-| `AGENT_MODE` | `auto` | `auto` (Gemini if a key exists), `gemini`, or `deterministic`. |
+| `AGENT_MODE` | `auto` | `auto` (Gemini if a key exists, then `GEMINI_FALLBACK_MODELS`, then the deterministic agent), `gemini` (an outage is an error), or `deterministic`. The simulator's Settings panel picks per run. |
 | `ALLOW_NETWORK` | `true` | Set `false` for fully offline use (CelesTrak refresh disabled). |
 | `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached (git-ignored). |
 | `CORS_ORIGINS` | Vite dev origins | Allowed browser origins. |

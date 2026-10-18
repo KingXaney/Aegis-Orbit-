@@ -25,6 +25,20 @@ def test_deterministic_run_is_valid_and_logged():
     assert sess.agent_runs[-1]["run_id"] == run["run_id"]
 
 
+def test_gemini_is_the_default_and_falls_back_without_a_key(monkeypatch):
+    from app.config import Settings
+    # auto picks Gemini when a key is set and keeps the deterministic fallback
+    assert Settings.model_fields["agent_mode"].default == "auto"
+    s = orchestrator.get_settings()
+    monkeypatch.setattr(s, "agent_mode", "auto")
+    monkeypatch.setattr(s, "gemini_api_key", "fake-key")
+    assert orchestrator._select_provider(None) == ("gemini", [])
+    assert orchestrator._select_provider("deterministic") == ("deterministic", [])
+    monkeypatch.setattr(s, "gemini_api_key", None)
+    provider, warnings = orchestrator._select_provider(None)
+    assert provider == "deterministic" and "GEMINI_API_KEY" in warnings[0]
+
+
 def test_validation_rejects_unknown_maneuver():
     sess = _session()
     orchestrator.run_analysis(sess, mode="deterministic")

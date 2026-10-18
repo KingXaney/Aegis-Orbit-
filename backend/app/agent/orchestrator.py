@@ -56,7 +56,7 @@ def _now() -> str:
 def _select_provider(mode: Optional[str]) -> (str, List[str]):
     s = get_settings()
     warnings: List[str] = []
-    mode = (mode or s.agent_mode or "auto").lower()
+    mode = (mode or s.agent_mode or "gemini").lower()
     if mode == "gemini":
         if not s.gemini_api_key:
             warnings.append("Gemini requested but GEMINI_API_KEY is not configured; using the deterministic fallback")
