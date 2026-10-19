@@ -6,7 +6,7 @@
   "scripts": {
     "cesium:assets": "node scripts/copy-cesium.mjs",
     "dev": "node scripts/copy-cesium.mjs && vite",
-    "build": "node scripts/copy-cesium.mjs && tsc -p tsconfig.app.json --noEmit && vite build",
+    "build": "node scripts/copy-cesium.mjs && tsc -p tsconfig.app.json --noEmit && vite build && node scripts/spa-routes.mjs",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "preview": "vite preview",
     "test": "vitest run"
