@@ -290,10 +290,16 @@ export default function ExplorerPage() {
       <div inert={panelOpen} className="x-scroll flex flex-col gap-8 px-4 py-8 [grid-area:body] md:grid md:grid-cols-2 md:items-start md:gap-x-8 md:px-6 lg:flex lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-x-divider lg:pt-0">
         {status === 'error' && (
           <div className="x-panel p-4 md:col-span-2" role="alert">
-            <h2 className="text-x-16 font-bold">Can’t load the catalog from {API_BASE}</h2>
+            <h2 className="text-x-16 font-bold">Can’t load the catalog{API_BASE ? ` from ${API_BASE}` : ''}</h2>
             <p className="mt-2 text-x-14 text-x-muted">{error}</p>
             <p className="mt-2 text-x-14 text-x-muted">
-              Start the backend with <code className="x-mono text-x-text">uvicorn app.main:app --reload</code> in <code className="x-mono text-x-text">backend/</code>, then retry.
+              {import.meta.env.DEV ? (
+                <>
+                  Start the backend with <code className="x-mono text-x-text">uvicorn app.main:app --reload</code> in <code className="x-mono text-x-text">backend/</code>, then retry.
+                </>
+              ) : (
+                'The backend may be starting up or temporarily unavailable — retry in a moment.'
+              )}
             </p>
             <button type="button" onClick={() => void load()} className="x-button mt-4">
               Retry

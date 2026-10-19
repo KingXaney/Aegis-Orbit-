@@ -47,7 +47,8 @@ Prerequisites: Node 22+, Python 3.12 (3.10+ works). On this machine Python 3.12 
 ```bash
 cd backend
 uv venv .venv --python 3.12            # or: python3.12 -m venv .venv
-uv pip install --python .venv/bin/python -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
+uv pip install --python .venv/bin/python -r requirements-dev.txt   # or: .venv/bin/pip install -r requirements-dev.txt
+                                        # requirements.txt is the runtime set (what a deployment installs); -dev adds pytest
 cp ../.env.example .env                 # optional: adjust network/CORS settings
 scripts/enable_xgboost_macos.sh         # macOS without Homebrew only: lets the xgboost wheel find an OpenMP runtime
 .venv/bin/uvicorn app.main:app --reload --port 8000
