@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     altitude_filter_margin_km: float = 50.0
     co_orbital_min_relative_speed_kms: float = 0.01  # below this the pair is treated as co-orbital, not a conjunction
     explorer_prewarm: bool = True  # screen GPM against the explorer catalog at startup, for the home page
+    # Serverless: run that screening inside the request that needs it instead of a background thread
+    # (threads are frozen between invocations and die with the instance). The deployment entry sets it.
+    explorer_sync_screening: bool = False
 
     # --- Risk thresholds (demo settings, not operational standards) -------
     pc_elevated_threshold: float = 1e-5

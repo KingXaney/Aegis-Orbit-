@@ -118,12 +118,7 @@ def _run() -> None:
 
 def _start_if_needed(now: float) -> None:
     """Start a background screening when there is no result, or it is old or from an older catalog. Call under _lock."""
-    result = _state["result"]
-    current = (result is not None
-               and now - result["window_start_unix"] < REFRESH_AFTER_S
-               and result["catalog_retrieved_at"] == explorer_catalog.get_catalog().get("retrieved_at"))
-    backing_off = _state["error"] is not None and now - _state["error_at"] < RETRY_AFTER_ERROR_S
-    if not current and not _state["running"] and not backing_off:
+    if _needs_run(now):
         _state["running"] = True
         threading.Thread(target=_run, name="explorer-screening", daemon=True).start()
 
@@ -134,10 +129,32 @@ def warm() -> None:
         _start_if_needed(time.time())
 
 
+def _needs_run(now: float) -> bool:
+    """True when there is no result, or it is old or from an older catalog, and nothing blocks a run. Call under _lock."""
+    result = _state["result"]
+    current = (result is not None
+               and now - result["window_start_unix"] < REFRESH_AFTER_S
+               and result["catalog_retrieved_at"] == explorer_catalog.get_catalog().get("retrieved_at"))
+    backing_off = _state["error"] is not None and now - _state["error_at"] < RETRY_AFTER_ERROR_S
+    return not current and not _state["running"] and not backing_off
+
+
 def get_approaches() -> Dict[str, Any]:
-    """{'status': 'ready', 'result': …} (possibly while a refresh runs), or 'computing' / 'error' with no result yet."""
+    """{'status': 'ready', 'result': …} (possibly while a refresh runs), or 'computing' / 'error' with no result yet.
+
+    In synchronous mode (serverless: a background thread would be frozen or killed with the instance)
+    the screening runs inside this request instead, so the first call on a cold instance is slow and
+    later calls are instant."""
+    if get_settings().explorer_sync_screening:
+        with _lock:
+            run_now = _needs_run(time.time())
+            if run_now:
+                _state["running"] = True
+        if run_now:
+            _run()
     with _lock:
-        _start_if_needed(time.time())
+        if not get_settings().explorer_sync_screening:
+            _start_if_needed(time.time())
         if _state["result"] is not None:
             return {"status": "ready", "result": _state["result"]}
         if _state["error"] is not None and not _state["running"]:

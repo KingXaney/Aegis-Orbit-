@@ -123,6 +123,13 @@ that leaves out `xgboost` (a very large wheel). The perception layer then loads 
 scikit-learn twin of the risk model and says so in its responses; metrics are near-identical
 (test PR-AUC 0.192 vs 0.186). Locally, `requirements-dev.txt` installs everything including xgboost.
 
+[`backend/main.py`](backend/main.py), the deployment entry, applies a serverless profile before the app
+loads: no startup prewarm, the home page's GPM screening runs inside the request that needs it (about
+12 s cold, then cached per instance), downloads are off, BLAS runs single-threaded, and the CelesTrak
+cache falls back to the temp dir. Screening propagates candidates in chunks, so peak memory stays
+around 400 MB whatever the catalog size. Explicit environment variables on the platform override
+these defaults.
+
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
 1. Start both servers and open <http://localhost:5173/mission>. The synthetic scenario loads on the **globe** in its **World** view: the primary is a synthetic-state stand-in for NASA's **GPM Core Observatory** (407 km, 65°, the orbit GPM flies and maintains with its hydrazine thrusters) plus a debris object on a crossing orbit and a few background objects. Press **Play** (or space). In the World view the camera stays still in space while the Earth turns beneath the spacecraft's teal orbit band; drag to look around the Earth and scroll to zoom. **Follow** rides with the spacecraft from close enough to see its true-scale 3D model (drag to orbit around it, scroll out for orbit context), **World** returns to the overview, and **Reset** re-frames the current view. Each object's design and L × W × H envelope (published for the ISS and GPM, scenario-defined for the synthetic debris, otherwise sized from the hard-body radius) appear in the object inspector. The ISS and GPM use NASA's public 3D models (NASA 3D Resources; credits in [`frontend/public/models/README.md`](frontend/public/models/README.md)), prepared by [`frontend/scripts/prepare_models.py`](frontend/scripts/prepare_models.py); other spacecraft are built procedurally.

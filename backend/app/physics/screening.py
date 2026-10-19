@@ -224,6 +224,34 @@ def secondary_from_conjunction_id(conjunction_id: str, primary_id: str) -> Optio
 # main entry point
 # --------------------------------------------------------------------------
 
+PROPAGATION_CHUNK = 256  # objects propagated together; bounds memory in screen()
+
+
+class _ChunkedPropagation:
+    """Propagates objects in order, one chunk at a time, keeping only the current chunk's results.
+
+    Looks like the dict ``propagate_batch`` returns, for callers that walk the objects in the given
+    order (as ``screen`` does)."""
+
+    def __init__(self, objects: Sequence[OrbitalObject], times: np.ndarray, numerical_step_s: float,
+                 chunk: int = PROPAGATION_CHUNK):
+        self._objects = list(objects)
+        self._times = times
+        self._step = numerical_step_s
+        self._chunk = max(1, int(chunk))
+        self._index = {o.object_id: i for i, o in enumerate(self._objects)}
+        self._current: Dict[str, PropagationResult] = {}
+        self._current_start = -1
+
+    def __getitem__(self, object_id: str) -> PropagationResult:
+        if object_id not in self._current:
+            i = self._index[object_id]
+            start = (i // self._chunk) * self._chunk
+            self._current = propagate_batch(self._objects[start:start + self._chunk], self._times, self._step)
+            self._current_start = start
+        return self._current[object_id]
+
+
 def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: float, t_end: float,
            screening_radius_km: float = 25.0, coarse_step_s: float = 30.0, altitude_margin_km: float = 50.0,
            co_orbital_min_speed_kms: float = 0.01, numerical_step_s: float = 10.0,
@@ -232,8 +260,11 @@ def screen(primary: OrbitalObject, objects: Sequence[OrbitalObject], t_start: fl
     valid = [o for o in objects if o.validation_status != "INVALID" and o.object_id != primary.object_id]
     candidates = altitude_overlap_filter(primary, valid, altitude_margin_km) if apply_altitude_filter else list(valid)
     times = time_grid(t_start, t_end, coarse_step_s)
-    results = propagate_batch([primary] + candidates, times, numerical_step_s)
-    res_p = results[primary.object_id]
+    res_p = propagate_batch([primary], times, numerical_step_s)[primary.object_id]
+    # Candidates are propagated lazily, a chunk at a time, so peak memory stays bounded however
+    # large the catalog is (N objects x T samples x 3 x 8 bytes, twice, would be gigabytes for a full
+    # catalog over a day; a serverless function has about one).
+    results = _ChunkedPropagation(candidates, times, numerical_step_s)
     failures: List[Dict[str, Any]] = []
     if res_p.status == "FAILED":
         raise ValueError(f"primary {primary.object_id} could not be propagated: {res_p.messages}")
