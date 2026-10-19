@@ -16,7 +16,7 @@ the orbital environment.
 
 ## What it does
 
-1. Loads public orbital data (CelesTrak GP/TLE records, cached and committed as a fixture) and a deterministic synthetic scenario.
+1. Loads public orbital data (CelesTrak GP/TLE records, cached and committed as a fixture under `backend/data/`) and a deterministic synthetic scenario.
 2. Propagates trajectories (SGP4 for catalog objects; two-body + J2 RK4 for synthetic states and post-burn arcs).
 3. Screens the primary against the catalog for close approaches (coarse filter → batch propagation → local minima → bounded refinement → dedup → ranking).
 4. Computes collision probability with the 2-D encounter-plane (Foster) method **only when covariance inputs exist**; otherwise reports `UNVERIFIED`.
@@ -80,7 +80,7 @@ See [`.env.example`](.env.example). Backend variables are read from `.env` in th
 | Variable | Default | Purpose |
 |---|---|---|
 | `ALLOW_NETWORK` | `true` | Set `false` for fully offline use (CelesTrak refresh disabled). |
-| `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached (git-ignored). |
+| `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached, relative to `backend/` (git-ignored; falls back to the system temp dir on a read-only filesystem). |
 | `CORS_ORIGINS` | Vite dev origins | Allowed browser origins. |
 | `VITE_API_BASE_URL` | `http://localhost:8000` | Frontend → backend base URL. |
 | `VITE_CESIUM_ION_TOKEN` | empty | Optional Cesium ion token for photographic world imagery on the simulator's globe. Without it the globe is the same vector-drawn Earth as the home page (Natural Earth coastlines via world-atlas, offline). |
@@ -103,9 +103,9 @@ cd frontend && npm run typecheck && npm run build  # type gate + production buil
 cd backend && .venv/bin/python scripts/train_perception_model.py --primaries 150 --max-candidates 3000 --workers 6
 ```
 
-Downloads the CelesTrak groups when `data/cache` is empty, samples 150 LEO payloads stratified by altitude and
+Downloads the CelesTrak groups when `backend/data/cache` is empty, samples 150 LEO payloads stratified by altitude and
 inclination, labels every candidate pair with the physics screening (24 h, 30 s coarse step, 1 s refinement), trains
-XGBoost and a scikit-learn twin and writes `data/models/perception_risk.*` plus a training report. The committed model
+XGBoost and a scikit-learn twin and writes `backend/data/models/perception_risk.*` plus a training report. The committed model
 was trained on 409,792 pairs (2,357 within 25 km, 91 within 5 km) in about a minute: test ROC-AUC 0.966, and the
 operating threshold keeps 100 % of the critical pairs while flagging 21 % of the candidates.
 
@@ -129,7 +129,7 @@ served as-is; a serverless filesystem is read-only). `vercel dev` runs both serv
 
 Open <http://localhost:5173/mission?scenario=real-iss> (or pick **A** in the scenario menu). The ISS (NORAD 25544)
 against the full cached CelesTrak snapshot: every object in the five groups, 18,598 besides the station
-(`data/scenarios/real_catalog_full.tle.gz`), drawn on the globe as a point cloud that the browser propagates with
+(`backend/data/scenarios/real_catalog_full.tle.gz`), drawn on the globe as a point cloud that the browser propagates with
 SGP4. The catalog comes from ground tracking; nothing is sensed on board. No conjunction is fabricated.
 
 1. Press **Run ML perception** at the top of the mission panel. The funnel plays step by step and the cloud follows
@@ -252,18 +252,18 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 ```
 .
 ├── README.md · .env.example · vercel.json
-├── backend/
+├── backend/                              # self-contained: code + the data it serves
 │   ├── app/{api,schemas,data,physics,perception,agent,scenarios,simulation}/
+│   ├── data/
+│   │   ├── cache/                        # downloaded CelesTrak groups (git-ignored)
+│   │   ├── models/perception_risk.*      # trained XGBoost + scikit-learn artifacts, metadata, training report
+│   │   └── scenarios/real_catalog{.tle,_full.tle.gz}, *.meta.json   # committed fixtures (400-object subset, full catalog) + provenance
 │   ├── scripts/build_real_fixture.py     # rebuilds data/scenarios/real_catalog.tle (--full: real_catalog_full.tle.gz) from downloaded groups
 │   ├── scripts/train_perception_model.py # labels CelesTrak pairs with the physics screening and trains the ranker
 │   ├── scripts/enable_xgboost_macos.sh   # pip-only OpenMP fix for the xgboost wheel on macOS
 │   └── tests/                            # pytest suite (physics, API, agent)
 ├── frontend/src/{api,components,explorer,globe,hooks,lib,panels,perception,sandbox,simulation,store,types}/
-├── doc/wiki/                             # maintained knowledge base: architecture, concepts, scenarios, analyses
-└── data/
-    ├── cache/                            # downloaded CelesTrak groups (git-ignored)
-    ├── models/perception_risk.*          # trained XGBoost + scikit-learn artifacts, metadata, training report
-    └── scenarios/real_catalog{.tle,_full.tle.gz}, *.meta.json   # committed fixtures (400-object subset, full catalog) + provenance
+└── doc/wiki/                             # maintained knowledge base: architecture, concepts, scenarios, analyses
 ```
 
 ## Known limitations
@@ -284,4 +284,4 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 
 Orbital elements from [CelesTrak](https://celestrak.org/) (GP data, groups `stations`, `active`,
 `cosmos-2251-debris`, `iridium-33-debris`, `fengyun-1c-debris`); retrieval time and filter are recorded in
-`data/scenarios/real_catalog.meta.json`. Earth: coastlines from Natural Earth (world-atlas 50 m) drawn into a texture at run time; Cesium ion world imagery when a token is configured.
+`backend/data/scenarios/real_catalog.meta.json`. Earth: coastlines from Natural Earth (world-atlas 50 m) drawn into a texture at run time; Cesium ion world imagery when a token is configured.

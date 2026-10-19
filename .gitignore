@@ -19,13 +19,13 @@ frontend/.vite/
 *.local
 
 # Perception training datasets (regenerable, large)
-data/models/*.npz
-data/models/*.tmp
+backend/data/models/*.npz
+backend/data/models/*.tmp
 
 # Runtime caches (downloaded orbital data, sessions)
-data/cache/*
-!data/cache/.gitkeep
-data/sessions/
+backend/data/cache/*
+!backend/data/cache/.gitkeep
+backend/data/sessions/
 
 # Editors / OS
 .DS_Store

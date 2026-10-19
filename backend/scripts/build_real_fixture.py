@@ -2,8 +2,8 @@
 
 Usage:
     python scripts/build_real_fixture.py --source-dir <dir with *.tle + retrieved_at.txt> \
-        --output ../data/scenarios/real_catalog.tle [--primary 25544] [--margin-km 60] [--max-objects 400]
-    python scripts/build_real_fixture.py --source-dir <dir> --output ../data/scenarios/real_catalog_full.tle.gz --full
+        --output data/scenarios/real_catalog.tle [--primary 25544] [--margin-km 60] [--max-objects 400]
+    python scripts/build_real_fixture.py --source-dir <dir> --output data/scenarios/real_catalog_full.tle.gz --full
 
 The fixture keeps the primary plus every object whose perigee/apogee band
 (widened by the margin) overlaps the primary's band, capped at --max-objects

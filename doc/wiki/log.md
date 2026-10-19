@@ -70,3 +70,12 @@ latest five entries, run `grep "^## \[" doc/wiki/log.md | tail -5`.
   (the prose is a backend template now); "the Gemini provider live" removed from Not measured yet.
 - Historical pages (the 2026-10-17 baseline run, `sources/codebase-a34844b.md`, older log entries)
   still mention Gemini; they describe the pinned commit and stay as written.
+
+## [2026-10-19] ingest | data/ moved under backend/; serverless-safe startup
+
+- Code change (outside the wiki workflow): the repo-root `data/` directory moved to `backend/data/`
+  so the backend service is self-contained (its Vercel bundle was missing the fixtures, which took
+  the deployed API down). `cache_path` now falls back to the system temp dir on a read-only
+  filesystem, and a failed explorer prewarm no longer prevents startup.
+- Updated paths in [data layer](components/data-layer.md), [GP elements](concepts/gp-elements-and-tle.md)
+  and [real ISS scenario](scenarios/real-iss.md). Historical pages stay as written.

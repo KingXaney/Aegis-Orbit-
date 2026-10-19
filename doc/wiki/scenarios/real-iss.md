@@ -14,10 +14,10 @@ and the scenario reports whatever the screening finds.
 
 ## Setup
 
-- **Catalog.** The committed fixture `data/scenarios/real_catalog.tle` holds 400 objects: the ISS plus
+- **Catalog.** The committed fixture `backend/data/scenarios/real_catalog.tle` holds 400 objects: the ISS plus
   the 399 objects closest to its band among the 10,853 whose band, widened by 60 km, overlapped. They
   come from the CelesTrak groups `stations`, `active` and three debris groups, retrieved
-  2026-10-17T15:59:10Z ([real_catalog.meta.json](../../../data/scenarios/real_catalog.meta.json)). See
+  2026-10-17T15:59:10Z ([real_catalog.meta.json](../../../backend/data/scenarios/real_catalog.meta.json)). See
   [data layer](../components/data-layer.md#fixture-vs-live-catalog).
 - **Window.** 24 h starting at the ISS element epoch rounded down to the hour, so SGP4 is evaluated
   close to its epoch ([real.py:92-97](../../../backend/app/scenarios/real.py#L92-L97)). For this fixture

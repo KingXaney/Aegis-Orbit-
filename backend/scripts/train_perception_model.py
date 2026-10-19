@@ -1,7 +1,7 @@
 """Train the collision-risk ranker from CelesTrak data.
 
     .venv/bin/python scripts/train_perception_model.py --primaries 150 --max-candidates 3000 --workers 6 \
-        --out ../data/models [--refresh] [--reuse-dataset ../data/models/perception_dataset.npz]
+        --out data/models [--refresh] [--reuse-dataset data/models/perception_dataset.npz]
 
 Downloads the configured CelesTrak groups when the cache is empty, samples LEO
 primaries, labels every candidate pair with the physics screening, trains the
@@ -38,7 +38,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20261017)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--library", default="both", choices=["both", "xgboost", "sklearn"])
-    ap.add_argument("--out", default=str(Path(__file__).resolve().parents[2] / "data" / "models"))
+    ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "data" / "models"))
     ap.add_argument("--refresh", action="store_true", help="re-download the CelesTrak groups")
     ap.add_argument("--reuse-dataset", default=None, help="skip labelling and train on an existing .npz")
     args = ap.parse_args()

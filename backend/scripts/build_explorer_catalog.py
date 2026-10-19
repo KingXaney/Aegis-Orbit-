@@ -1,7 +1,7 @@
 """Build the committed explorer catalog fixture from CelesTrak.
 
 Usage:
-    python scripts/build_explorer_catalog.py [--output ../data/catalog/explorer_catalog.json.gz] [--force]
+    python scripts/build_explorer_catalog.py [--output data/catalog/explorer_catalog.json.gz] [--force]
 
 Downloads GROUP=active, NAME=DEB, NAME=R/B and SATCAT (reusing data/cache
 copies younger than two hours unless --force), joins them on NORAD ID and

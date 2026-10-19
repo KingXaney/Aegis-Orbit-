@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..config import REPO_ROOT, get_settings
+from ..config import BACKEND_ROOT, get_settings
 from ..physics.constants import R_EARTH_KM
 from . import celestrak
 from .satcat import SatcatRecord, parse_satcat_csv
@@ -29,7 +29,7 @@ GP_QUERIES: Dict[str, Dict[str, str]] = {
     "debris": {"NAME": "DEB"},
     "rocket-bodies": {"NAME": "R/B"},
 }
-FIXTURE_PATH = REPO_ROOT / "data" / "catalog" / "explorer_catalog.json.gz"
+FIXTURE_PATH = BACKEND_ROOT / "data" / "catalog" / "explorer_catalog.json.gz"
 CACHE_NAME = "explorer_catalog.json.gz"
 # CelesTrak asks clients not to re-download unchanged GP data more often than this.
 MIN_REFRESH_INTERVAL_S = 2 * 3600.0

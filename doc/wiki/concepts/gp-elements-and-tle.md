@@ -49,7 +49,7 @@ uncertainty, which is why Pc from public data is `UNVERIFIED`
 - **Committed fixture.** Retrieved 2026-10-17T15:59:10Z. It parsed 18,604 records, with 0 rejected.
   10,853 objects overlapped the ISS band ±60 km, capped to the 400 closest by band centre. Five ISS
   module entries were excluded as co-located
-  ([real_catalog.meta.json](../../../data/scenarios/real_catalog.meta.json)).
+  ([real_catalog.meta.json](../../../backend/data/scenarios/real_catalog.meta.json)).
 
 See [data layer](../components/data-layer.md) for the cache, fixture builder and live refresh.
 

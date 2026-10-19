@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..config import REPO_ROOT, get_settings
+from ..config import BACKEND_ROOT, get_settings
 from ..data import celestrak
 from ..data.catalog import Catalog
 from ..data.tle import flag_stale, parse_tle_text
@@ -24,11 +24,11 @@ from ..physics.time_utils import iso, parse_iso
 
 SCENARIO_ID = "real-iss"
 PRIMARY_ID = "NORAD-25544"
-FIXTURE_TLE = REPO_ROOT / "data" / "scenarios" / "real_catalog.tle"
-FIXTURE_META = REPO_ROOT / "data" / "scenarios" / "real_catalog.meta.json"
+FIXTURE_TLE = BACKEND_ROOT / "data" / "scenarios" / "real_catalog.tle"
+FIXTURE_META = BACKEND_ROOT / "data" / "scenarios" / "real_catalog.meta.json"
 # The same download, every object kept (scripts/build_real_fixture.py --full): what the ML funnel filters.
-FULL_FIXTURE_TLE = REPO_ROOT / "data" / "scenarios" / "real_catalog_full.tle.gz"
-FULL_FIXTURE_META = REPO_ROOT / "data" / "scenarios" / "real_catalog_full.meta.json"
+FULL_FIXTURE_TLE = BACKEND_ROOT / "data" / "scenarios" / "real_catalog_full.tle.gz"
+FULL_FIXTURE_META = BACKEND_ROOT / "data" / "scenarios" / "real_catalog_full.meta.json"
 WINDOW_HOURS = 24.0
 REFRESH_GROUPS = ["stations", "active", "cosmos-2251-debris", "iridium-33-debris", "fengyun-1c-debris"]
 MAX_OBJECTS = 400

@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]  # backend/ is self-contained: data fixtures live under it
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
 
     # --- Data --------------------------------------------------------------
     allow_network: bool = True
-    data_cache_dir: Path = Path("data/cache")
+    data_cache_dir: Path = Path("data/cache")  # relative to backend/
     stale_elements_days: float = 30.0  # records older than this (vs. window) are flagged stale
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -113,7 +114,7 @@ class Settings(BaseSettings):
     @property
     def perception_model_meta_file(self) -> Path:
         p = self.perception_model_meta_path
-        return p if p.is_absolute() else REPO_ROOT / p
+        return p if p.is_absolute() else BACKEND_ROOT / p
 
     @property
     def perception_training_group_list(self) -> List[str]:
@@ -127,8 +128,14 @@ class Settings(BaseSettings):
     def cache_path(self) -> Path:
         p = self.data_cache_dir
         if not p.is_absolute():
-            p = REPO_ROOT / p
-        p.mkdir(parents=True, exist_ok=True)
+            p = BACKEND_ROOT / p
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Read-only filesystem (serverless): only /tmp is writable, so the cache lives there.
+            import tempfile
+            p = Path(tempfile.gettempdir()) / "aegis-orbit-cache"
+            p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property

@@ -19,7 +19,7 @@ committed fixture, and network refresh is optional.
 | [catalog.py](../../../backend/app/data/catalog.py) | `OrbitalObject` dataclass and `Catalog` (ordered dict + rejected records + `source_info`) |
 | [tle.py](../../../backend/app/data/tle.py) | TLE validation, parsing, derived elements, category inference, STALE flagging |
 | [celestrak.py](../../../backend/app/data/celestrak.py) | GP download (`gp.php?GROUP=…&FORMAT=tle`) and a cache with sidecar metadata |
-| [scripts/build_real_fixture.py](../../../backend/scripts/build_real_fixture.py) | rebuilds `data/scenarios/real_catalog.{tle,meta.json}` from downloaded groups |
+| [scripts/build_real_fixture.py](../../../backend/scripts/build_real_fixture.py) | rebuilds `backend/data/scenarios/real_catalog.{tle,meta.json}` from downloaded groups |
 
 ## OrbitalObject
 
@@ -40,7 +40,7 @@ See [basis labels](../concepts/covariance-and-basis-labels.md) for what each lab
 
 ## Cache and network
 
-- **Cache files.** Each downloaded group is written to `data/cache/celestrak_<group>.tle`, with a
+- **Cache files.** Each downloaded group is written to `backend/data/cache/celestrak_<group>.tle`, with a
   `.meta.json` sidecar recording the group, the URL, `retrieved_at` and the line count
   ([celestrak.py:25-57](../../../backend/app/data/celestrak.py#L25-L57)). The cache directory is
   git-ignored.

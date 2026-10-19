@@ -17,9 +17,13 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Start GPM's screening for the home page in the background; startup doesn't wait for it.
+    # Start GPM's screening for the home page in the background; startup doesn't wait for it,
+    # and a prewarm failure (e.g. a cold serverless instance) must never take the API down.
     if settings.explorer_prewarm:
-        explorer_screening.warm()
+        try:
+            explorer_screening.warm()
+        except Exception as exc:  # noqa: BLE001 - the screening endpoint reports its own errors
+            print(f"explorer prewarm failed (continuing without it): {exc}")
     yield
 
 
