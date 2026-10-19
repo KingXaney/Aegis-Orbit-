@@ -15,9 +15,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str
     version: str
-    agent_mode: str
-    gemini_configured: bool
-    gemini_model: str
+    agent: str
     network_allowed: bool
     scenarios: List[str]
     disclaimer: str
@@ -318,7 +316,6 @@ class ToolCallRecord(BaseModel):
 class AgentAnalyzeRequest(BaseModel):
     scenario_id: str
     conjunction_id: Optional[str] = None
-    mode: Optional[str] = Field(default=None, description="auto | gemini | deterministic")
     max_candidates: int = Field(default=3, ge=1, le=6)
 
 
@@ -326,7 +323,6 @@ class AgentRunResponse(BaseModel):
     run_id: str
     scenario_id: str
     provider: str
-    model: Optional[str] = None
     status: str
     started_at: str
     finished_at: Optional[str] = None

@@ -145,8 +145,6 @@ function AgentSection() {
   const error = useAppStore((s) => s.agentError);
   const runAgent = useAppStore((s) => s.runAgent);
   const scenario = useAppStore((s) => s.scenario);
-  const health = useAppStore((s) => s.health);
-  const agentMode = useAppStore((s) => s.agentMode);
   return (
     <Section
       title="AI agent"
@@ -160,18 +158,13 @@ function AgentSection() {
       {!run && !loading && !error && (
         <Empty>
           The agent screens, plans, checks secondary risks and explains a recommendation. Every number it reports comes from a backend tool result.
-          {agentMode === 'deterministic' ? (
-            <div className="mt-1 text-dim">Deterministic agent selected in Settings: the same tool workflow with a templated explanation.</div>
-          ) : (
-            health && !health.gemini_configured && <div className="mt-1 text-dim">No GEMINI_API_KEY configured: the deterministic fallback runs the same tool workflow with a templated explanation.</div>
-          )}
         </Empty>
       )}
       {loading && <div className="text-[11px] text-muted">Screening → details → planning → secondary checks → report. This takes a few seconds.</div>}
       {run && (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge tone="info">{run.provider === 'gemini' ? `Gemini · ${run.model}` : 'deterministic fallback'}</Badge>
+            <Badge tone="info">deterministic agent</Badge>
             <Badge tone={run.status === 'NEEDS_APPROVAL' ? 'safe' : run.status === 'COMPLETED' ? 'neutral' : 'threat'}>{run.status.replace('_', ' ')}</Badge>
             <Badge tone={run.validation.status === 'VALID' ? 'safe' : 'threat'}>validation {run.validation.status}</Badge>
             <span className="mono text-[10px] text-dim">{run.run_id}</span>

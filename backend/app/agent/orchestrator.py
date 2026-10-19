@@ -1,17 +1,12 @@
 """Agent orchestration.
 
-Two providers implement the same workflow and produce the same report shape:
-
-* ``gemini`` – Google Gemini with function calling. The model decides which
-  tools to call; the backend executes them, logs every call and validates the
-  final recommendation against the tool results.
-* ``deterministic`` – a rule-based fallback used when no API key is configured
-  (or on request). It runs the identical tool sequence and writes a templated
-  explanation from the structured results, so the end-to-end demo works
-  offline. The UI labels which provider produced a run.
-
-In both cases every number shown to the user comes from a tool result; the
-report's numeric fields are filled by the backend from session records.
+The agent is deterministic and rule-based: it runs a fixed tool workflow
+(list_conjunctions → get_conjunction_details → plan_maneuvers → check_secondary
+for every candidate → generate_report) against the physics engine, logs every
+tool call, writes a templated explanation from the structured results and
+validates the final recommendation against the tool outputs. Every number
+shown to the user comes from a tool result; the report's numeric fields are
+filled by the backend from session records. The whole flow works offline.
 """
 from __future__ import annotations
 
@@ -19,76 +14,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ..config import get_settings
 from ..physics.time_utils import iso
-from ..simulation import service
 from ..simulation.session import SimulationSession
-from .tools import ToolRegistry, function_declarations
-
-SYSTEM_PROMPT = """You are the reasoning layer of a spacecraft collision-avoidance simulator. You explain and
-recommend; you never compute orbital numbers yourself. Every quantity you mention must come from a tool result,
-and you must refer to conjunctions and maneuvers by the IDs the tools return.
-
-Workflow (follow it in order, one tool call at a time):
-1. list_conjunctions to find the ranked close approaches for the selected satellite.
-2. Pick the highest-ranked threat (or the conjunction the user named) and call get_conjunction_details.
-3. Call plan_maneuvers for that conjunction (2-3 candidates).
-4. Call check_secondary for EVERY candidate you might recommend.
-5. Call generate_report exactly once with your explanation text and the recommended maneuver ID.
-
-Rules:
-- Threat states (NORMAL, MONITORING, ELEVATED, CRITICAL, MITIGATED, UNVERIFIED) are assigned by the backend; report
-  them as given and never upgrade or downgrade them yourself.
-- If the collision probability status is UNVERIFIED, say clearly that it could not be computed and why; do not invent
-  a probability. If it is based on illustrative covariance, say so.
-- Distinguish computed values, configured thresholds, assumptions and illustrative estimates.
-- Recommend only a candidate that is feasible, meets the configured target and passed secondary screening (PASS or
-  LIMITED with an explanation). If none does, set no_action_recommended=true and explain.
-- Explain trade-offs (delta-v cost vs. risk reduction vs. lead time) and the uncertainties that limit the conclusion.
-- Approval is a human decision; end by stating that the recommendation awaits approval. This is a simulation and no
-  spacecraft is commanded."""
+from .tools import ToolRegistry
 
 
 def _now() -> str:
     return iso(datetime.now(timezone.utc))
 
 
-def _select_provider(mode: Optional[str]) -> (str, List[str]):
-    s = get_settings()
-    warnings: List[str] = []
-    mode = (mode or s.agent_mode or "gemini").lower()
-    if mode == "gemini":
-        if not s.gemini_api_key:
-            warnings.append("Gemini requested but GEMINI_API_KEY is not configured; using the deterministic fallback")
-            return "deterministic", warnings
-        return "gemini", warnings
-    if mode == "deterministic":
-        return "deterministic", warnings
-    if s.gemini_api_key:
-        return "gemini", warnings
-    warnings.append("GEMINI_API_KEY not configured; using the deterministic fallback agent")
-    return "deterministic", warnings
-
-
-def run_analysis(sess: SimulationSession, conjunction_id: Optional[str] = None, mode: Optional[str] = None,
+def run_analysis(sess: SimulationSession, conjunction_id: Optional[str] = None,
                  max_candidates: int = 3) -> Dict[str, Any]:
-    provider, warnings = _select_provider(mode)
-    run = {"run_id": f"RUN-{uuid.uuid4().hex[:8]}", "scenario_id": sess.scenario_id, "provider": provider,
-           "model": None, "status": "RUNNING", "started_at": _now(), "finished_at": None, "tool_calls": [],
-           "report": None, "validation": {"status": "PENDING", "checks": []}, "narrative": "", "warnings": warnings}
+    run = {"run_id": f"RUN-{uuid.uuid4().hex[:8]}", "scenario_id": sess.scenario_id, "provider": "deterministic",
+           "status": "RUNNING", "started_at": _now(), "finished_at": None, "tool_calls": [],
+           "report": None, "validation": {"status": "PENDING", "checks": []}, "narrative": "", "warnings": []}
     registry = ToolRegistry(sess, max_candidates=max_candidates)
-    forced_gemini = (mode or get_settings().agent_mode or "auto").lower() == "gemini"
     try:
-        if provider == "gemini":
-            outage = _run_gemini_chain(sess, registry, conjunction_id, run)
-            if outage is not None:
-                if forced_gemini:  # an explicit Gemini request must not hide the outage behind the fallback
-                    raise outage
-                run["provider"], run["model"] = "deterministic", None
-                run["warnings"].append("Gemini could not serve this run; the deterministic fallback agent produced it with the same tools")
-                _run_deterministic(sess, registry, conjunction_id, run)
-        else:
-            _run_deterministic(sess, registry, conjunction_id, run)
+        _run_deterministic(sess, registry, conjunction_id, run)
     except Exception as exc:  # the run record must always be returned to the UI
         run["status"] = "FAILED"
         run["warnings"].append(f"agent run failed: {exc}")
@@ -109,7 +51,7 @@ def run_analysis(sess: SimulationSession, conjunction_id: Optional[str] = None, 
 
 
 # --------------------------------------------------------------------------
-# deterministic fallback
+# the deterministic workflow
 # --------------------------------------------------------------------------
 
 def _fmt_pc(pc: Dict[str, Any]) -> str:
@@ -206,71 +148,6 @@ def _run_deterministic(sess: SimulationSession, reg: ToolRegistry, conjunction_i
         "recommendation_rationale": rationale,
         "uncertainties": uncertainties,
     })
-
-
-# --------------------------------------------------------------------------
-# Gemini
-# --------------------------------------------------------------------------
-
-def _run_gemini_chain(sess: SimulationSession, reg: ToolRegistry, conjunction_id: Optional[str], run: Dict[str, Any]):
-    """Try the configured model and then its fallbacks; None once one of them completed the run, else the last outage."""
-    from .gemini_client import GeminiUnavailable
-
-    chain = get_settings().gemini_model_chain
-    last: Optional[GeminiUnavailable] = None
-    for i, model in enumerate(chain):
-        run["model"] = model
-        try:
-            _run_gemini(sess, reg, conjunction_id, run, model)
-            return None
-        except GeminiUnavailable as exc:
-            last = exc
-            more = i + 1 < len(chain)
-            run["warnings"].append(f"{model} unavailable ({exc.reason})" + ("; trying the next model" if more else ""))
-    return last
-
-
-def _run_gemini(sess: SimulationSession, reg: ToolRegistry, conjunction_id: Optional[str], run: Dict[str, Any],
-                model: Optional[str] = None) -> None:
-    from .gemini_client import GeminiClient
-
-    s = get_settings()
-    client = GeminiClient(api_key=s.gemini_api_key, model=model or s.gemini_model, system_instruction=SYSTEM_PROMPT,
-                          declarations=function_declarations(), attempts=s.gemini_retry_attempts,
-                          base_delay_s=s.gemini_retry_base_s)
-    scen = sess.scenario
-    prompt = (f"Scenario '{scen.name}' ({scen.kind}). Primary object: {scen.primary_id}. Window {iso(scen.start_unix)} to "
-              f"{iso(scen.end_unix)}. ")
-    prompt += (f"Analyse conjunction {conjunction_id}." if conjunction_id else
-               "Find the most significant close approach, evaluate avoidance maneuvers and recommend one.")
-    prompt += " Use the tools; do not estimate any number yourself."
-    turn = client.start(prompt)
-    calls_made = 0
-    nudged = False
-    while True:
-        if turn.function_calls:
-            results = []
-            for call in turn.function_calls:
-                if calls_made >= s.agent_max_tool_calls:
-                    results.append({"name": call["name"], "response": {"error": "tool-call budget exhausted; call generate_report now"}})
-                    continue
-                calls_made += 1
-                out = reg.execute(call["name"], call["args"])
-                results.append({"name": call["name"], "response": out})
-            if reg.report is not None:
-                run["narrative"] = narrative_from_report(reg.report)
-                return
-            turn = client.send_tool_results(results)
-            continue
-        # No function call: the model produced text.
-        if reg.report is None and not nudged:
-            nudged = True
-            turn = client.send_tool_results([{"name": "system", "response": {
-                "instruction": "You have not called generate_report yet. Call generate_report now with your explanation and the recommended maneuver ID (or no_action_recommended=true)."}}])
-            continue
-        if turn.text:
-            run["narrative"] = turn.text
-        return
 
 
 # --------------------------------------------------------------------------

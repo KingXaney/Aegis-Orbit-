@@ -2,7 +2,7 @@ from app.config import Settings
 from app.physics.collision_probability import PcResult
 from app.physics.threat import evaluate_threat_state, meets_mitigation_target, worst_state
 
-S = Settings(gemini_api_key=None)
+S = Settings()
 
 
 def _pc(value, basis="PROVIDED"):

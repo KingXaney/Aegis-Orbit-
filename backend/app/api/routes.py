@@ -55,8 +55,7 @@ def _call(fn, *args, **kwargs):
 @router.get("/health", response_model=HealthResponse)
 def health():
     s = get_settings()
-    return HealthResponse(status="ok", version=__version__, agent_mode=s.agent_mode,
-                          gemini_configured=bool(s.gemini_api_key), gemini_model=s.gemini_model,
+    return HealthResponse(status="ok", version=__version__, agent="deterministic",
                           network_allowed=s.allow_network,
                           scenarios=[x["scenario_id"] for x in list_scenarios()], disclaimer=DISCLAIMER)
 
@@ -163,7 +162,7 @@ def secondary_check(maneuver_id: str, req: SecondaryCheckRequest):
 def agent_analyze(req: AgentAnalyzeRequest):
     sess = _session(req.scenario_id)
     try:
-        return run_analysis(sess, conjunction_id=req.conjunction_id, mode=req.mode, max_candidates=req.max_candidates)
+        return run_analysis(sess, conjunction_id=req.conjunction_id, max_candidates=req.max_candidates)
     except service.NotFound as exc:
         raise HTTPException(status_code=404, detail=exc.args[0] if exc.args else str(exc)) from exc
     except service.BadRequest as exc:

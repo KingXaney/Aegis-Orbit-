@@ -145,18 +145,13 @@ describe('liveTick with ghosts', () => {
   });
 });
 
-describe('agent model setting', () => {
+describe('agent runs', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('sends the chosen model with the analyze request', async () => {
+  it('sends the scenario and selected conjunction with the analyze request', async () => {
     const analyze = vi.spyOn(api, 'analyze').mockRejectedValue(new Error('offline'));
     useAppStore.setState({ scenarioId: 'synthetic-conjunction', selectedConjunctionId: null });
-    expect(useAppStore.getState().agentMode).toBe('gemini');
     await useAppStore.getState().runAgent();
-    expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined, 'auto');
-    useAppStore.getState().setAgentMode('deterministic');
-    await useAppStore.getState().runAgent();
-    expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined, 'deterministic');
-    useAppStore.getState().setAgentMode('gemini');
+    expect(analyze).toHaveBeenLastCalledWith('synthetic-conjunction', undefined);
   });
 });

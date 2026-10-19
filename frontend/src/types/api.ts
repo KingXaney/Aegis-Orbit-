@@ -6,9 +6,7 @@ export type ThreatState = 'NORMAL' | 'MONITORING' | 'ELEVATED' | 'CRITICAL' | 'M
 export interface HealthResponse {
   status: string;
   version: string;
-  agent_mode: string;
-  gemini_configured: boolean;
-  gemini_model: string;
+  agent: string;
   network_allowed: boolean;
   scenarios: string[];
   disclaimer: string;
@@ -481,8 +479,7 @@ export interface AgentReport {
 export interface AgentRun {
   run_id: string;
   scenario_id: string;
-  provider: 'gemini' | 'deterministic';
-  model: string | null;
+  provider: 'deterministic';
   status: 'NEEDS_APPROVAL' | 'COMPLETED' | 'INVALID' | 'INCOMPLETE' | 'FAILED' | 'RUNNING';
   started_at: string;
   finished_at: string | null;

@@ -23,7 +23,9 @@ import type {
   Trajectory,
 } from '../types/api';
 
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+// Dev default: the local backend. Production default: same origin ('') — the deployment
+// (vercel.json) rewrites /api/* to the backend service.
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '')).replace(/\/$/, '');
 
 export class ApiError extends Error {
   status: number;
@@ -109,10 +111,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ scenario_id: scenarioId }),
     }),
-  analyze: (scenarioId: string, conjunctionId?: string, mode?: string) =>
+  analyze: (scenarioId: string, conjunctionId?: string) =>
     request<AgentRun>('/api/agent/analyze', {
       method: 'POST',
-      body: JSON.stringify({ scenario_id: scenarioId, conjunction_id: conjunctionId, mode }),
+      body: JSON.stringify({ scenario_id: scenarioId, conjunction_id: conjunctionId }),
     }),
   simulationState: (scenarioId: string) => request<SimulationState>(`/api/simulation/state${qs({ scenario_id: scenarioId })}`),
   approve: (scenarioId: string, maneuverId: string) =>

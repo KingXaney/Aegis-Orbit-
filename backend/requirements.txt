@@ -7,7 +7,6 @@ scipy==1.18.1
 sgp4==2.27
 scikit-learn==1.9.1
 xgboost==3.4.1  # on macOS without Homebrew run scripts/enable_xgboost_macos.sh after installing
-google-genai==2.31.0
 httpx==0.28.1
 python-dotenv==1.2.4
 pytest==9.1.1
