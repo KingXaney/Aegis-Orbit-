@@ -39,7 +39,7 @@ the orbital environment.
 
 ## Quick start
 
-Prerequisites: Node 22+, Python 3.12 (3.11+ works). On this machine Python 3.12 was installed with
+Prerequisites: Node 22+, Python 3.12+. On this machine Python 3.12 was installed with
 [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.12`); a plain `python3.12 -m venv` works too.
 
 ### 1. Backend

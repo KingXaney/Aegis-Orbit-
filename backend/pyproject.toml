@@ -2,7 +2,7 @@
 name = "orbital-avoidance-backend"
 version = "0.1.0"
 description = "Physics engine, API and AI agent for the autonomous orbital collision avoidance simulator"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 # The deployed runtime set (Vercel's Python builder installs from this file, not requirements.txt).
 # Lean on purpose: no uvicorn (the platform hosts the ASGI app), no pytest, and no xgboost — its
 # wheel is huge, and the perception layer falls back to the committed scikit-learn twin artifact
