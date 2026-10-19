@@ -35,3 +35,7 @@ data/sessions/
 
 # TypeScript incremental build caches
 *.tsbuildinfo
+
+# Internal working notes (kept locally, not part of the published repo)
+reviews/
+.planning/

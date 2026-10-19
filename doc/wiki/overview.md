@@ -46,8 +46,8 @@ in [GP elements and TLEs](concepts/gp-elements-and-tle.md) and the [data layer](
    ([propagation models](concepts/propagation-models.md)).
 4. **Clearing the threat is not enough.** Every candidate is re-screened against the whole catalog, and
    MITIGATED requires a PASS ([secondary screening](concepts/secondary-screening.md)).
-5. **The demo is deterministic.** The synthetic encounter rebuilds to millimetres, and a deterministic
-   agent stands in for Gemini offline
+5. **The demo is deterministic.** The synthetic encounter rebuilds to millimetres, and the rule-based
+   agent produces the same validated report for the same session state, fully offline
    ([synthetic scenario](scenarios/synthetic-conjunction.md)).
 
 ## What we know from running it

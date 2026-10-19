@@ -55,13 +55,12 @@ barely change the orbit's altitude profile *(background)*.
 
 ### The agent's prose is not validated
 
-**Status: open.**
+**Status: closed 2026-10-18 — moot.**
 
 `validate_report` checks IDs, the threat miss distance and the candidate's properties
-([orchestrator.py:254-288](../../../backend/app/agent/orchestrator.py#L254-L288)). It does not check
-the six prose fields, where a Gemini narrative could misquote a number. Two options: extract the
-numbers from the prose and cross-check them against tool outputs, or render every number in the UI
-from structured fields only.
+([orchestrator.py:157-191](../../../backend/app/agent/orchestrator.py#L157-L191)), not the six prose
+fields. This was a risk while an LLM wrote the prose; since the Gemini provider was removed
+(2026-10-18), the prose is a backend template filled from tool outputs, so it cannot misquote them.
 
 ### Tool errors do not invalidate a run
 
@@ -97,9 +96,6 @@ Nothing flags that case
 
 ## Not measured yet
 
-- **The Gemini provider live.** It is tested only with a scripted fake model
-  ([test_agent.py:68](../../../backend/tests/test_agent.py#L68)). Run it once a `GEMINI_API_KEY` is
-  available, and file the run as an analysis.
 - **The planner on `real-iss`.** This would exercise the distance target, because no Pc exists, and
   the SGP4-vs-J2 model difference, which the docstring expects to reach a few km over several hours
   ([propagation.py:10-12](../../../backend/app/physics/propagation.py#L10-L12)). The top conjunction

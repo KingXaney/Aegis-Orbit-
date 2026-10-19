@@ -67,7 +67,7 @@ All routes are under `/api` ([routes.py](../../../backend/app/api/routes.py)).
 
 | Route | Purpose |
 |---|---|
-| `GET /health` | status, version, agent mode, whether Gemini is configured, whether network is allowed, scenario list, disclaimer |
+| `GET /health` | status, version, the agent kind, whether network is allowed, scenario list, disclaimer |
 | `GET /scenarios`, `GET /scenarios/{id}` | scenario summaries; detail includes the window, data source, thresholds and simulation state |
 | `POST /scenarios/{id}/reset?live=` | rebuilds the session; `live=true` re-downloads the real catalog |
 | `GET /objects?scenario_id=`, `GET /objects/{id}?at=` | catalog listing; object detail with its state in TEME, geodetic and osculating elements |
@@ -75,7 +75,7 @@ All routes are under `/api` ([routes.py](../../../backend/app/api/routes.py)).
 | `POST /conjunctions/screen`, `GET /conjunctions`, `GET /conjunctions/{id}` | screen, or read back the current results |
 | `POST`/`GET /conjunctions/{id}/maneuvers` | plan, or read back the existing plan |
 | `POST /maneuvers/{id}/secondary-check` | secondary screening for one candidate |
-| `POST /agent/analyze` | agent run (`mode`: auto, gemini or deterministic) |
+| `POST /agent/analyze` | run the deterministic agent on the scenario (optionally a named conjunction) |
 | `GET /simulation/state`, `POST /simulation/approve`, `POST /simulation/reject` | the human-in-the-loop state |
 | `POST /data/refresh` | downloads fresh CelesTrak groups and rebuilds `real-iss` |
 

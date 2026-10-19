@@ -3,12 +3,16 @@
 An interactive, AI-assisted collision-avoidance simulator for satellites: **predict, plan, avoid, explain**.
 A Python physics engine propagates real and synthetic orbits, screens for close approaches, estimates
 collision probability with explicit uncertainty labels, plans candidate avoidance burns and screens them
-for secondary risks. A Gemini-powered agent orchestrates those tools and explains its recommendation; a
-human approves or rejects the *simulated* maneuver in a Waymo-style 3D visualisation of the orbital
-environment.
+for secondary risks. A deterministic reasoning agent orchestrates those tools and explains its
+recommendation; a human approves or rejects the *simulated* maneuver in a Waymo-style 3D visualisation of
+the orbital environment.
 
 > **Research and simulation prototype.** Positions are SGP4 estimates from public mean elements or
 > synthetic states, not sensor telemetry. Nothing here is flight software and no spacecraft is commanded.
+
+![Catalog explorer: every tracked object propagated live in the browser, with GPM's next 24 h of close approaches](doc/screenshots/home.png)
+
+![Mission simulator: a critical conjunction, the agent's validated recommendation and the close-up view of the spacecraft](doc/screenshots/mission-agent.png)
 
 ## What it does
 
@@ -18,7 +22,7 @@ environment.
 4. Computes collision probability with the 2-D encounter-plane (Foster) method **only when covariance inputs exist**; otherwise reports `UNVERIFIED`.
 5. Plans candidate maneuvers with a documented grid search and objective (delta-v cost vs. risk reduction).
 6. Re-screens every candidate's post-burn trajectory against the catalog (secondary screening).
-7. Runs a Gemini tool-calling agent (or a deterministic fallback when no key is set) that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — every number comes from a backend tool result and the final recommendation is validated against the tool outputs. An overloaded model is retried; a model that cannot serve the run (quota, outage) is replaced by the next configured one, and the deterministic agent is the last resort, with the reason shown in the run's warnings.
+7. Runs a deterministic tool-calling agent that explains the threat, the assessment, the candidates, the secondary risks and the uncertainties — it follows a fixed workflow (screen → details → plan → secondary checks → report), every number comes from a backend tool result, every tool call is logged, and the final recommendation is validated against the tool outputs. The whole flow works offline.
 8. Runs a **perception layer**: an XGBoost risk ranker trained on CelesTrak-derived screening labels scores every catalog object from its orbital elements in milliseconds; the physics screening verifies the flagged objects and assigns tiers (CRITICAL / SEMI_CRITICAL / ML_WATCH), served by `GET /api/perception`. The model only ranks; every displayed distance and time is computed. On the real ISS scenario the mission page plays it as a funnel over the full 18,598-object catalog and ends in an operator decision (see Scenario A).
 9. Visualises the emergency on a CesiumJS globe: the spacecraft, drawn with its true-scale design model (NASA's glTF for the ISS and GPM, part-built for other designs), its planned path as a teal band half an orbit ahead, the threat object's path, the predicted TCA with its danger region and miss vector, and the candidate and approved maneuvers.
 10. Requires explicit human approval before the simulated maneuver is applied. An approved burn becomes part of the spacecraft's trajectory (a piecewise path: the native model up to the burn, a two-body + J2 arc after it), so every later screening, plan and trajectory sees the committed path. Each committed burn leaves a translucent **ghost** of the spacecraft flying the course it did not take until the pass the burn avoided; the close-up follows a ghost on request, the clock slows down before its collision and a warning shows what would have happened (with the true miss distance).
@@ -29,9 +33,9 @@ environment.
 | Layer | Technology |
 |---|---|
 | Frontend | React 19 + TypeScript, Vite 7, CesiumJS 1.146 (globe), Tailwind CSS 4, Recharts 3, Zustand |
-| Backend | Python 3.12, FastAPI, Pydantic 2, NumPy, SciPy, `sgp4`, `xgboost` 3.4 (+ scikit-learn twin), `google-genai` |
+| Backend | Python 3.12, FastAPI, Pydantic 2, NumPy, SciPy, `sgp4`, `xgboost` 3.4 (+ scikit-learn twin) |
 | Data | CelesTrak GP data (committed fixture + optional live refresh), deterministic synthetic scenario |
-| AI | Google Gemini function calling (key stays in the backend); deterministic fallback agent |
+| AI | XGBoost perception ranker (physics-verified); deterministic tool-calling agent with report validation |
 
 ## Quick start
 
@@ -44,7 +48,7 @@ Prerequisites: Node 22+, Python 3.12 (3.10+ works). On this machine Python 3.12 
 cd backend
 uv venv .venv --python 3.12            # or: python3.12 -m venv .venv
 uv pip install --python .venv/bin/python -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
-cp ../.env.example .env                 # optional: add GEMINI_API_KEY
+cp ../.env.example .env                 # optional: adjust network/CORS settings
 scripts/enable_xgboost_macos.sh         # macOS without Homebrew only: lets the xgboost wheel find an OpenMP runtime
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
@@ -75,10 +79,6 @@ See [`.env.example`](.env.example). Backend variables are read from `.env` in th
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | empty | Enables the Gemini agent. Never sent to the browser. Empty → deterministic fallback agent. |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model used for tool calling (`gemini-2.5-flash` is no longer served to new API keys). |
-| `GEMINI_FALLBACK_MODELS` | `gemini-3-flash-preview` | Tried in order when the model above cannot serve a run (daily quota, outage, retired model); after the last one the deterministic agent completes the run. |
-| `AGENT_MODE` | `auto` | `auto` (Gemini if a key exists, then `GEMINI_FALLBACK_MODELS`, then the deterministic agent), `gemini` (an outage is an error), or `deterministic`. The simulator's Settings panel picks per run. |
 | `ALLOW_NETWORK` | `true` | Set `false` for fully offline use (CelesTrak refresh disabled). |
 | `DATA_CACHE_DIR` | `data/cache` | Where downloaded CelesTrak groups are cached (git-ignored). |
 | `CORS_ORIGINS` | Vite dev origins | Allowed browser origins. |
@@ -108,6 +108,14 @@ inclination, labels every candidate pair with the physics screening (24 h, 30 s 
 XGBoost and a scikit-learn twin and writes `data/models/perception_risk.*` plus a training report. The committed model
 was trained on 409,792 pairs (2,357 within 25 km, 91 within 5 km) in about a minute: test ROC-AUC 0.966, and the
 operating threshold keeps 100 % of the critical pairs while flagging 21 % of the candidates.
+
+### 6. Deploy (Vercel)
+
+[`vercel.json`](vercel.json) deploys the repository as one Vercel project with two services:
+`frontend` (Vite, serves the app on the catch-all route) and `backend` (FastAPI, public under `/api/*`).
+The browser reaches the backend through the same-origin `/api` rewrite, so production builds need no
+`VITE_API_BASE_URL`. Set `ALLOW_NETWORK=false` on the backend service (the committed data fixtures are
+served as-is; a serverless filesystem is read-only). `vercel dev` runs both services together locally.
 
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
@@ -187,7 +195,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 │ simulation controller     │ ─────────────▶ │ api/routes ── simulation/service ── session│
 │  (clock, Hermite sampling)│                │        │                │                  │
 │ globe/scene (entities,    │ ◀───────────── │ agent/orchestrator ──▶ agent/tools         │
-│  TEME→fixed per frame)    │   trajectories │   (Gemini | deterministic)   │             │
+│  TEME→fixed per frame)    │   trajectories │   (deterministic workflow)   │             │
 │ panels (threat, agent,    │   conjunctions │                              ▼             │
 │  candidates, decision)    │   maneuvers    │ physics/: propagation · screening ·        │
 └───────────────────────────┘   agent runs   │   collision_probability · maneuver_planner │
@@ -225,7 +233,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 | `GET /api/conjunctions?scenario_id=`, `GET /api/conjunctions/{id}` | Current screening results / full conjunction record |
 | `POST /api/conjunctions/{id}/maneuvers`, `GET …/maneuvers` | Plan candidates / fetch the existing plan |
 | `POST /api/maneuvers/{id}/secondary-check` | Secondary screening for a candidate |
-| `POST /api/agent/analyze` | Run the agent (`mode`: `auto` \| `gemini` \| `deterministic`) |
+| `POST /api/agent/analyze` | Run the deterministic agent (screen → details → plan → secondary checks → validated report) |
 | `GET /api/perception?scenario_id=&maneuver_id=&horizon_s=&critical_radius_km=&tracked_radius_km=&include_hidden=` | ML-ranked, physics-verified objects around the primary with tiers, RTN miss vectors and trails; `funnel` gives the counts and ids the mission page plays |
 | `GET /api/perception/model` | Loaded model, metrics, threshold and training provenance |
 | `GET /api/simulation/state` | Threat state, committed burns, decisions, the event log, the backend's last known clock |
@@ -243,14 +251,15 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 
 ```
 .
-├── README.md · .env.example
+├── README.md · .env.example · vercel.json
 ├── backend/
 │   ├── app/{api,schemas,data,physics,perception,agent,scenarios,simulation}/
 │   ├── scripts/build_real_fixture.py     # rebuilds data/scenarios/real_catalog.tle (--full: real_catalog_full.tle.gz) from downloaded groups
 │   ├── scripts/train_perception_model.py # labels CelesTrak pairs with the physics screening and trains the ranker
 │   ├── scripts/enable_xgboost_macos.sh   # pip-only OpenMP fix for the xgboost wheel on macOS
 │   └── tests/                            # pytest suite (physics, API, agent)
-├── frontend/src/{api,components,globe,hooks,lib,panels,simulation,store,types}/
+├── frontend/src/{api,components,explorer,globe,hooks,lib,panels,perception,sandbox,simulation,store,types}/
+├── doc/wiki/                             # maintained knowledge base: architecture, concepts, scenarios, analyses
 └── data/
     ├── cache/                            # downloaded CelesTrak groups (git-ignored)
     ├── models/perception_risk.*          # trained XGBoost + scikit-learn artifacts, metadata, training report
@@ -268,7 +277,7 @@ frontend/ (React + Cesium)                    backend/ (FastAPI)
 * Single-user in-memory sessions; restarting the backend clears screenings, plans, decisions, spawned junk and committed burns (the scenario definitions are deterministic and reload identically).
 * The sandbox autopilot works with the same grid planner: with little warning only large burns (up to 5 m/s) clear the 5 km target, so a piece dropped minutes ahead costs far more Δv than a real operator would spend, or is reported as unavoidable. The backend has no clock of its own; the browser sends the simulation time with every sandbox call.
 * A ghost's "collision" is the screened pre-burn closest approach, typically a few hundred metres; no physical impact is modelled and the number is always shown.
-* The Gemini path needs network access and a key; the deterministic fallback keeps the whole demo working offline. A free-tier key allows 20 requests per day per model and one agent run is five to seven requests, so a free key gives two or three live runs a day before the fallback chain takes over; enable billing on the key for a demo.
+* The agent is deterministic and rule-based: it always follows the same tool workflow and writes a templated explanation from the structured results. It cannot answer free-form questions; its value is that every statement traces to a logged tool call and the recommendation is machine-validated.
 * The perception model is a ranker trained on one CelesTrak snapshot (2026-10-17) with labels from our own screening; its scores are estimates, never displayed as distances, and it should be retrained after `POST /api/data/refresh` when the snapshot ages. Objects it flags are always verified by the physics screening before they are tiered.
 
 ## Data attribution

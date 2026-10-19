@@ -56,3 +56,17 @@ latest five entries, run `grep "^## \[" doc/wiki/log.md | tail -5`.
   - unmeasured: live Gemini, the planner on real-iss, the frontend panels
   - six suggested raw sources
 - No code was changed.
+
+## [2026-10-18] ingest | Gemini provider removed; deterministic agent is the only provider
+
+- Code change (outside the wiki workflow): `backend/app/agent/gemini_client.py` deleted, the
+  orchestrator reduced to the deterministic workflow, `GEMINI_*`/`AGENT_MODE` settings and the
+  `google-genai` dependency removed, `/api/agent/analyze` no longer takes a `mode`, `/api/health`
+  reports `agent: "deterministic"`, and the frontend's agent-model Settings panel was removed.
+- Updated: [agent orchestrator](components/agent-orchestrator.md) (rewritten; citations re-pointed),
+  [agent integrity](concepts/agent-integrity.md), [architecture](components/architecture.md),
+  [simulation service](components/simulation-service.md), [overview](overview.md), the index line.
+- [Open questions](analyses/open-questions.md): "the agent's prose is not validated" closed as moot
+  (the prose is a backend template now); "the Gemini provider live" removed from Not measured yet.
+- Historical pages (the 2026-10-17 baseline run, `sources/codebase-a34844b.md`, older log entries)
+  still mention Gemini; they describe the pinned commit and stay as written.

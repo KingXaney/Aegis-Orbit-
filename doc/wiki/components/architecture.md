@@ -38,7 +38,7 @@ flowchart LR
 | `backend/app/data/` | TLE parsing, the object model, the CelesTrak cache | [data layer](data-layer.md) |
 | `backend/app/scenarios/` | Builds the two scenarios' catalogs and windows | [synthetic](../scenarios/synthetic-conjunction.md), [real ISS](../scenarios/real-iss.md) |
 | `backend/app/simulation/` | Session state, plus a service layer that returns plain dicts | [simulation service](simulation-service.md) |
-| `backend/app/agent/` | Tool registry, the Gemini client, the deterministic fallback, validation | [agent orchestrator](agent-orchestrator.md) |
+| `backend/app/agent/` | Tool registry, the deterministic agent workflow, report validation | [agent orchestrator](agent-orchestrator.md) |
 | `backend/app/api/`, `schemas/` | Thin FastAPI routes and Pydantic response models | [simulation service](simulation-service.md#rest-api) |
 | `frontend/src/` | Clock, interpolation, Cesium scene, store, panels | [frontend globe](frontend-globe.md) |
 

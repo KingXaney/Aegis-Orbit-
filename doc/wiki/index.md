@@ -25,7 +25,7 @@ Every page in the wiki, grouped by type. Agents read this first on every query. 
 - [System architecture](components/architecture.md) — A FastAPI backend that owns physics and state, a React + Cesium frontend that only interpolates and draws, and one service layer for HTTP and the agent · 1 source · updated 2026-10-17
 - [Screening pipeline](components/screening-pipeline.md) — Band filter, batch propagation, local minima, Brent refinement, co-orbital rejection, dedupe and rank · 1 source · updated 2026-10-17
 - [Maneuver planner](components/maneuver-planner.md) — A 120-candidate RTN grid search with a documented objective and a diverse top-3 recommendation · 1 source · updated 2026-10-17
-- [Agent orchestrator](components/agent-orchestrator.md) — The Gemini and deterministic run loops, the tool registry and log, report validation · 1 source · updated 2026-10-17
+- [Agent orchestrator](components/agent-orchestrator.md) — The deterministic run loop, the tool registry and log, report validation · 1 source · updated 2026-10-18
 - [Simulation session, service layer and REST API](components/simulation-service.md) — Per-scenario in-memory state, the shared operations, approve and reject, the `/api` routes · 1 source · updated 2026-10-17
 - [Data layer](components/data-layer.md) — The OrbitalObject model, TLE parsing, the CelesTrak cache, the fixture vs live catalog · 1 source · updated 2026-10-17
 - [Frontend globe, clock and interpolation](components/frontend-globe.md) — One simulation clock, Hermite interpolation, TEME → Earth-fixed every frame, Cesium clock sync · 1 source · updated 2026-10-17

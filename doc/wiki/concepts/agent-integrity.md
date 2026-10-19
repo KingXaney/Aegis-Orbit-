@@ -52,23 +52,24 @@ The system prompt sets the agent up as a reasoning layer that never computes orb
 
 A run ends as `NEEDS_APPROVAL` (valid report), `INVALID`, `INCOMPLETE` (no report), `FAILED`
 (exception) or `COMPLETED` (nothing to do)
-([orchestrator.py:73-102](../../../backend/app/agent/orchestrator.py#L73-L102)).
+([orchestrator.py:26-55](../../../backend/app/agent/orchestrator.py#L26-L55)).
 
-## Two providers, one workflow
+## One deterministic workflow
 
-**Gemini function calling** is used when a key is configured. **A deterministic fallback** runs the
-identical tool sequence and fills a template with the results. The UI labels which provider ran
-([orchestrator.py:1-15](../../../backend/app/agent/orchestrator.py#L1-L15)). Details are in
-[agent orchestrator](../components/agent-orchestrator.md).
+**The agent is deterministic and rule-based**: it runs a fixed tool sequence and fills a template with
+the results, so the same session state always produces the same report
+([orchestrator.py:1-10](../../../backend/app/agent/orchestrator.py#L1-L10)). Validation still runs on
+every report — the structure is kept so any future provider is held to the same checks. Details are in
+[agent orchestrator](../components/agent-orchestrator.md). An earlier Gemini function-calling provider
+was removed on 2026-10-18 (see [log](../log.md)).
 
 ## Pitfalls
 
-- **The prose is not checked.** Validation covers IDs, the threat miss distance and the candidate's
-  properties, but not the numbers the model writes in the six prose fields. A Gemini narrative could
-  still misquote a value. See [open questions](../analyses/open-questions.md).
+- **The prose is templated, not checked.** Validation covers IDs, the threat miss distance and the
+  candidate's properties; the six prose fields are filled by the backend template from tool outputs.
 - **Tool errors don't invalidate a run.** A run with a failed tool call can still be `VALID`, because
   `no_tool_errors` is excluded from the verdict
-  ([orchestrator.py:287](../../../backend/app/agent/orchestrator.py#L287)).
+  ([orchestrator.py:190](../../../backend/app/agent/orchestrator.py#L190)).
 
 ## See also
 
