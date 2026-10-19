@@ -1,3 +1,5 @@
+# Local runtime set. Keep the shared pins in sync with pyproject.toml [project.dependencies],
+# which is what a deployment (Vercel) installs; this file adds the pieces only local runs need.
 fastapi==0.143.3
 uvicorn[standard]==0.54.0
 pydantic==2.14.1

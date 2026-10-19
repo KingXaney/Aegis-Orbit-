@@ -2,7 +2,22 @@
 name = "orbital-avoidance-backend"
 version = "0.1.0"
 description = "Physics engine, API and AI agent for the autonomous orbital collision avoidance simulator"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+# The deployed runtime set (Vercel's Python builder installs from this file, not requirements.txt).
+# Lean on purpose: no uvicorn (the platform hosts the ASGI app), no pytest, and no xgboost — its
+# wheel is huge, and the perception layer falls back to the committed scikit-learn twin artifact
+# and says so in its responses. Local development installs requirements-dev.txt (which adds them).
+dependencies = [
+    "fastapi==0.143.3",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.0",
+    "numpy==2.5.4",
+    "scipy==1.18.1",
+    "sgp4==2.27",
+    "scikit-learn==1.9.1",
+    "httpx==0.28.1",
+    "python-dotenv==1.2.4",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

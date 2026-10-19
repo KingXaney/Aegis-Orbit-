@@ -39,7 +39,7 @@ the orbital environment.
 
 ## Quick start
 
-Prerequisites: Node 22+, Python 3.12 (3.10+ works). On this machine Python 3.12 was installed with
+Prerequisites: Node 22+, Python 3.12 (3.11+ works). On this machine Python 3.12 was installed with
 [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.12`); a plain `python3.12 -m venv` works too.
 
 ### 1. Backend
@@ -117,6 +117,11 @@ operating threshold keeps 100 % of the critical pairs while flagging 21 % of the
 The browser reaches the backend through the same-origin `/api` rewrite, so production builds need no
 `VITE_API_BASE_URL`. Set `ALLOW_NETWORK=false` on the backend service (the committed data fixtures are
 served as-is; a serverless filesystem is read-only). `vercel dev` runs both services together locally.
+
+The deployment installs the backend's dependencies from `backend/pyproject.toml` — a lean runtime set
+that leaves out `xgboost` (a very large wheel). The perception layer then loads the committed
+scikit-learn twin of the risk model and says so in its responses; metrics are near-identical
+(test PR-AUC 0.192 vs 0.186). Locally, `requirements-dev.txt` installs everything including xgboost.
 
 ## Demo walkthrough (Scenario B — scripted conjunction)
 
